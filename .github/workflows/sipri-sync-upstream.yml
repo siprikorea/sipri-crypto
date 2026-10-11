@@ -1,0 +1,139 @@
+# Keeps Sipri Crypto in step with Bouncy Castle: merges bcgit/bc-java into the sync/upstream branch,
+# runs the sipri tests on the result, and opens (or refreshes) a pull request into main. A merge
+# conflict opens an issue instead, to be resolved locally with scripts/sync-upstream.sh.
+#
+# Token: pushes made with the default GITHUB_TOKEN can't update files under .github/workflows
+# (upstream occasionally changes codeql.yml) and don't trigger other workflows. Add a repository
+# secret SIPRI_SYNC_TOKEN - a fine-grained PAT with Contents, Pull requests, Issues and Workflows
+# read/write on this repository - to avoid both; without it the default token is used.
+name: "Sipri Sync Upstream"
+
+on:
+  schedule:
+    - cron: '0 0 * * 1'   # Mondays 00:00 UTC (09:00 KST)
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: 'Upstream ref to merge (branch or tag, e.g. main or r1rv87)'
+        required: false
+        default: 'main'
+
+permissions:
+  contents: write
+  pull-requests: write
+  issues: write
+
+concurrency:
+  group: sipri-sync-upstream
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    env:
+      SYNC_BRANCH: sync/upstream
+      UPSTREAM_REF: ${{ github.event.inputs.ref || 'main' }}
+      GH_TOKEN: ${{ secrets.SIPRI_SYNC_TOKEN || github.token }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: main
+          fetch-depth: 0
+          token: ${{ secrets.SIPRI_SYNC_TOKEN || github.token }}
+
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '25'
+
+      - name: Fetch upstream
+        id: fetch
+        run: |
+          git config user.name "sipri-sync-bot"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git remote add upstream https://github.com/bcgit/bc-java.git
+          git fetch --quiet --tags upstream
+          if git rev-parse -q --verify "refs/remotes/upstream/$UPSTREAM_REF" >/dev/null; then
+            REF="upstream/$UPSTREAM_REF"
+          else
+            REF="$UPSTREAM_REF"   # a tag
+          fi
+          echo "ref=$REF" >> "$GITHUB_OUTPUT"
+          echo "sha=$(git rev-parse --short "$REF")" >> "$GITHUB_OUTPUT"
+          echo "behind=$(git rev-list --count "HEAD..$REF")" >> "$GITHUB_OUTPUT"
+
+      - name: Merge
+        id: merge
+        if: steps.fetch.outputs.behind != '0'
+        run: |
+          echo 'settings.gradle merge=union' >> "$(git rev-parse --git-path info/attributes)"
+          git switch -C "$SYNC_BRANCH"
+          if git merge --no-ff --no-edit \
+              -m "Merge upstream Bouncy Castle ${{ steps.fetch.outputs.ref }} (${{ steps.fetch.outputs.sha }}) into Sipri Crypto" \
+              "${{ steps.fetch.outputs.ref }}"; then
+            echo "conflict=false" >> "$GITHUB_OUTPUT"
+          else
+            {
+              echo "conflict=true"
+              echo "files<<EOF"
+              git diff --name-only --diff-filter=U
+              echo "EOF"
+            } >> "$GITHUB_OUTPUT"
+            git merge --abort
+          fi
+
+      - name: Report conflict
+        if: steps.merge.outputs.conflict == 'true'
+        run: |
+          TITLE="Upstream merge conflict: bcgit/bc-java ${{ steps.fetch.outputs.sha }}"
+          BODY=$(cat <<EOF
+          Merging \`${{ steps.fetch.outputs.ref }}\` (\`${{ steps.fetch.outputs.sha }}\`, ${{ steps.fetch.outputs.behind }} commits) into \`main\` conflicts in:
+
+          \`\`\`
+          ${{ steps.merge.outputs.files }}
+          \`\`\`
+
+          Resolve locally:
+
+          \`\`\`
+          scripts/sync-upstream.sh --ref ${{ steps.fetch.outputs.ref }} --test
+          # fix the conflicts, git add, git commit
+          scripts/sync-upstream.sh --check
+          git push -u origin HEAD   # then open a PR
+          \`\`\`
+
+          Workflow run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          EOF
+          )
+          EXISTING=$(gh issue list --state open --label upstream-sync --json number --jq '.[0].number')
+          if [ -n "$EXISTING" ]; then
+            gh issue comment "$EXISTING" --body "$BODY"
+          else
+            gh label create upstream-sync --color FBCA04 --description "Bouncy Castle upstream sync" 2>/dev/null || true
+            gh issue create --title "$TITLE" --label upstream-sync --body "$BODY"
+          fi
+          exit 1
+
+      - name: Overlay check
+        if: steps.merge.outputs.conflict == 'false'
+        run: scripts/sync-upstream.sh --check
+
+      - name: Build and test
+        if: steps.merge.outputs.conflict == 'false'
+        run: ./gradlew --console=plain --no-daemon :prov:compileJava :sipri:build
+
+      - name: Push and open pull request
+        if: steps.merge.outputs.conflict == 'false'
+        run: |
+          git push --force origin "$SYNC_BRANCH"
+          if [ -z "$(gh pr list --head "$SYNC_BRANCH" --state open --json number --jq '.[0].number')" ]; then
+            gh pr create --base main --head "$SYNC_BRANCH" \
+              --title "Merge upstream Bouncy Castle (${{ steps.fetch.outputs.sha }})" \
+              --body "Merges ${{ steps.fetch.outputs.behind }} commit(s) from bcgit/bc-java \`${{ steps.fetch.outputs.ref }}\` (\`${{ steps.fetch.outputs.sha }}\`).
+
+          The overlay check and the sipri build/tests passed in [this run](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}).
+
+          Merge with a **merge commit** (not squash or rebase) so the upstream history stays an ancestor of main and the next sync stays incremental."
+          else
+            echo "pull request already open; branch refreshed"
+          fi
