@@ -1,0 +1,21 @@
+# Sipri Crypto overlay manifest.
+#
+# Every path that differs from upstream bcgit/bc-java must match one of the patterns below
+# (git pathspec "glob" syntax). scripts/sync-upstream.sh and the sync-upstream workflow fail when
+# a merge leaves any other path different from upstream - that is drift in the Bouncy Castle tree,
+# which is what makes future merges conflict. Put Sipri code in the sipri/ module instead.
+#
+# Files listed under "modified upstream files" are upstream files Sipri edits; keep that list as
+# short as possible and the edits as small as possible.
+
+# --- Sipri-owned paths (new files, never present upstream) ---
+sipri/**
+SIPRI.md
+.sipri-overlay
+.github/README.md
+.github/workflows/sipri-*.yml
+scripts/sync-upstream.sh
+
+# --- modified upstream files ---
+# one appended line: include "sipri" (merged with the union driver, see sync-upstream.sh)
+settings.gradle

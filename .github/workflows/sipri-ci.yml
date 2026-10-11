@@ -1,0 +1,39 @@
+# Sipri Crypto CI: build and test the sipri module, and check that the Bouncy Castle tree has not
+# drifted from upstream outside the paths listed in .sipri-overlay.
+name: "Sipri CI"
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0   # the overlay check needs the merge base with upstream
+
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '25'   # the root build requires a JDK 25 daemon (docs/claude/build-and-test.md)
+
+      - name: Overlay check
+        run: scripts/sync-upstream.sh --check
+
+      - name: Build and test sipri
+        run: ./gradlew --console=plain --no-daemon :prov:compileJava :sipri:build
+
+      - name: Test report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: sipri-test-results
+          path: sipri/build/test-results/
+          if-no-files-found: ignore

@@ -1,0 +1,95 @@
+// Sipri Crypto: Korean national cryptographic algorithms (KCDSA, EC-KCDSA, LSH, HIGHT, HAS-160)
+// and the "SipriCrypto" JCA/JCE provider, layered on top of the unmodified Bouncy Castle tree.
+//
+// Everything Sipri-specific lives in this module under com.siprikorea.crypto so that the
+// org.bouncycastle sources stay byte-identical to bcgit/bc-java and upstream merges stay clean
+// (see SIPRI.md and scripts/sync-upstream.sh). Keep it that way: add new algorithms here, not by
+// editing core/prov.
+
+plugins {
+  id "biz.aQute.bnd.builder" version "7.1.0"
+}
+
+def sipriVersion = '1.0.0-SNAPSHOT'
+
+version = sipriVersion
+
+jar.archiveBaseName = "sipri-crypto-$vmrange"
+
+dependencies {
+    implementation project(':prov')
+
+    testImplementation group: 'junit', name: 'junit', version: '4.13.2'
+}
+
+compileJava {
+    options.release = 8
+}
+
+task sourcesJar(type: Jar) {
+    archiveBaseName = jar.archiveBaseName
+    archiveClassifier = 'sources'
+    from sourceSets.main.allSource
+}
+
+javadoc {
+    options.encoding = 'UTF-8'
+    options.addBooleanOption('Xdoclint:none', true)
+}
+
+task javadocJar(type: Jar, dependsOn: javadoc) {
+    archiveBaseName = jar.archiveBaseName
+    archiveClassifier = 'javadoc'
+    from javadoc.destinationDir
+}
+
+jar {
+    // tied to the Bouncy Castle minor release this tree tracks, e.g. [1.87,1.88)
+    String bcBase = rootProject.version.toString().replace('-SNAPSHOT', '')
+
+    manifest.attributes('Bundle-Name': 'sipri-crypto')
+    manifest.attributes('Bundle-SymbolicName': 'com.siprikorea.crypto')
+    manifest.attributes('Bundle-Vendor': 'Sipri Crypto')
+    manifest.attributes('Bundle-RequiredExecutionEnvironment': 'JavaSE-1.8')
+    manifest.attributes('Export-Package': "com.siprikorea.crypto.*;version=${sipriVersion.replace('-SNAPSHOT', '')}")
+    manifest.attributes('Import-Package': "org.bouncycastle.*;version=\"[${bcBase},${maxVersion})\",*")
+    manifest.attributes('Implementation-Title': 'Sipri Crypto')
+    manifest.attributes('Implementation-Version': sipriVersion)
+    manifest.attributes('Implementation-Vendor': 'Sipri Crypto')
+    manifest.attributes('Automatic-Module-Name': 'com.siprikorea.crypto')
+}
+
+test {
+    forkEvery = 1
+    maxParallelForks = 1
+}
+
+publishing {
+    publications {
+        maven(MavenPublication) {
+            groupId = 'com.siprikorea.crypto'
+            artifactId = "sipri-crypto-$vmrange"
+            version = sipriVersion
+            from components.java
+
+            artifact(javadocJar)
+            artifact(sourcesJar)
+
+            pom {
+                name = 'Sipri Crypto'
+                description = 'Korean national cryptographic algorithms (KCDSA, EC-KCDSA, LSH, HIGHT, HAS-160) and the SipriCrypto JCA/JCE provider, built on Bouncy Castle.'
+                url = 'https://github.com/siprikorea/sipri-crypto'
+                licenses {
+                    license {
+                        name = 'Bouncy Castle Licence (MIT)'
+                        url = 'https://www.bouncycastle.org/licence.html'
+                    }
+                }
+                scm {
+                    url = 'https://github.com/siprikorea/sipri-crypto'
+                    connection = 'scm:git:https://github.com/siprikorea/sipri-crypto.git'
+                }
+            }
+        }
+    }
+}
