@@ -116,11 +116,17 @@ public class MLDSAPrivateKeyParameters
             index += delta;
             this.t1 = eng.deriveT1(rho, k, tr, s1, s2, t0);
             this.seed = null;
+
+            // FIPS 204 Algorithm 6: tr is H(pk), so an expanded key whose tr does not match its rho and t1 cannot sign
+            if (!Arrays.constantTimeAreEqual(this.tr, eng.deriveTr(this.rho, this.t1)))
+            {
+                throw new IllegalArgumentException("'encoding' has inconsistent tr");
+            }
         }
 
         if (pubKey != null)
         {
-            if (!Arrays.constantTimeAreEqual(this.t1, pubKey.getT1()))
+            if (!Arrays.constantTimeAreEqual(this.t1, pubKey.getT1()) || !Arrays.constantTimeAreEqual(this.rho, pubKey.getRho()))
             {
                 throw new IllegalArgumentException("passed in public key does not match private values");
             }
@@ -144,7 +150,13 @@ public class MLDSAPrivateKeyParameters
         this.prefFormat = preferredFormat;
     }
 
+    /** @deprecated Use {@link #withPreferredFormat(int)} instead. */
     public MLDSAPrivateKeyParameters getParametersWithFormat(int format)
+    {
+        return withPreferredFormat(format);
+    }
+
+    public MLDSAPrivateKeyParameters withPreferredFormat(int format)
     {
         if (this.prefFormat == format)
         {
@@ -250,7 +262,7 @@ public class MLDSAPrivateKeyParameters
      * Zeroize the secret key material held by this object.
      * <p>
      * Note: the internal arrays may be shared with other parameter objects derived from this one
-     * (for example via {@link #getParametersWithFormat(int)}); destroying them here invalidates
+     * (for example via {@link #withPreferredFormat(int)}); destroying them here invalidates
      * those objects too.
      */
     public synchronized void destroy()

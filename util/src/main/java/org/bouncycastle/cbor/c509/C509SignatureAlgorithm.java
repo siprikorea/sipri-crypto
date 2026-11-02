@@ -19,14 +19,9 @@ import org.bouncycastle.util.Integers;
 
 /**
  * The C509 Signature Algorithms Registry, Section 8.14 of
- * draft-ietf-cose-cbor-encoded-cert-20. Each registered CBOR int value stands for a
+ * draft-ietf-cose-cbor-encoded-cert-21. Each registered CBOR int value stands for a
  * complete X.509 AlgorithmIdentifier, including its parameters, so conversion in
  * either direction is an exact table lookup.
- * <p>
- * Note the draft's Figure 18 prints the DER for values 23-25 with an inconsistent
- * SEQUENCE length octet (0x0B against 13 content octets); the entries here are built
- * from the OID object model and encode with the correct 0x0D, matching real
- * certificates and the value -256 row.
  */
 public final class C509SignatureAlgorithm
 {
@@ -166,6 +161,24 @@ public final class C509SignatureAlgorithm
         case ECDSA_WITH_SHAKE128:
         case ECDSA_WITH_SHAKE256:
         case SM2_WITH_SM3:
+            return true;
+        default:
+            return false;
+        }
+    }
+
+    /**
+     * Return true if the registry value is one of the RFC 6955 proof-of-possession
+     * algorithms (values 14 to 16), whose signature value has the DhSigStatic syntax
+     * of Section 4.2 rather than being a signature.
+     */
+    public static boolean isDhSigStaticFormat(int value)
+    {
+        switch (value)
+        {
+        case ECDH_POP_SHA256_HMAC_SHA256:
+        case ECDH_POP_SHA384_HMAC_SHA384:
+        case ECDH_POP_SHA512_HMAC_SHA512:
             return true;
         default:
             return false;

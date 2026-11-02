@@ -38,6 +38,7 @@ public class RegressionTest
         new PGPUtilTest(),
         new BcPGPEd25519JcaKeyPairConversionTest(),
         new RewindStreamWhenDecryptingMultiSKESKMessageTest(),
+        new PGPSecretKeyRingTest(),
         new PGPFeaturesTest(),
         new ArmoredInputStreamTest(),
         new ArmoredInputStreamBackslashTRVFTest(),
@@ -52,6 +53,7 @@ public class RegressionTest
         new ArmoredOutputStreamUTF8Test(),
         new UnrecognizableSubkeyParserTest(),
         new PGPObjectFactorySecretSubkeyTest(),
+        new PGPObjectFactoryUnsupportedVersionTest(),
         new IgnoreUnknownEncryptedSessionKeys(),
         new PGPEncryptedDataTest(),
         new PGPAeadTest(),
@@ -81,7 +83,6 @@ public class RegressionTest
         new LegacyX448KeyPairTest(),
 
         new PGPv6MessageDecryptionTest(),
-        new JceExternalPublicKeyDataDecryptorFactoryBuilderTest(),
         new Curve25519PrivateKeyEncodingTest(),
         new EdDSAKeyConversionWithLeadingZeroTest(),
         new JcaECDSAKeyConverterTest(),
@@ -94,6 +95,9 @@ public class RegressionTest
         new PGPKeyPairGeneratorTest(),
         new PGPKeyRingGeneratorTest(),
         new PGPShortEncSessionKeyTest(),
+        new PGPSignatureMergeTest(),
+        new PGPRFC9980VectorTest(),
+        new PGPRFC9980KeyPairTest(),
     };
 
     public static void main(String[] args)

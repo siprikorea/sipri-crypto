@@ -14,8 +14,12 @@ import java.security.cert.X509CRL;
 import java.security.cert.X509Certificate;
 import java.security.interfaces.RSAPublicKey;
 import java.security.spec.DSAParameterSpec;
+import junit.framework.Assert;
 import org.bouncycastle.jce.spec.ECNamedCurveGenParameterSpec;
 import java.util.Date;
+import java.util.HashMap;
+import java.util.Map;
+import java.util.Random;
 
 import javax.crypto.KeyGenerator;
 import javax.crypto.SecretKey;
@@ -25,7 +29,15 @@ import org.bouncycastle.asn1.bc.BCObjectIdentifiers;
 import org.bouncycastle.asn1.cryptopro.CryptoProObjectIdentifiers;
 import org.bouncycastle.asn1.pkcs.PKCSObjectIdentifiers;
 import org.bouncycastle.asn1.pkcs.RSAESOAEPparams;
+import org.bouncycastle.asn1.ASN1Encodable;
+import org.bouncycastle.asn1.ASN1EncodableVector;
+import org.bouncycastle.asn1.ASN1ObjectIdentifier;
+import org.bouncycastle.asn1.DERPrintableString;
+import org.bouncycastle.asn1.DERSequence;
+import org.bouncycastle.asn1.DERSet;
+import org.bouncycastle.asn1.DERUTF8String;
 import org.bouncycastle.asn1.x500.X500Name;
+import org.bouncycastle.asn1.x500.style.BCStyle;
 import org.bouncycastle.asn1.x509.AlgorithmIdentifier;
 import org.bouncycastle.asn1.x509.AuthorityKeyIdentifier;
 import org.bouncycastle.asn1.x509.BasicConstraints;
@@ -49,6 +61,8 @@ import org.bouncycastle.jce.spec.GOST3410ParameterSpec;
 import org.bouncycastle.operator.OperatorCreationException;
 import org.bouncycastle.operator.jcajce.JcaContentSignerBuilder;
 import org.bouncycastle.pqc.jcajce.provider.BouncyCastlePQCProvider;
+import org.bouncycastle.util.Arrays;
+import org.bouncycastle.util.Integers;
 import org.bouncycastle.util.encoders.Base64;
 
 public class CMSTestUtil
@@ -289,6 +303,98 @@ public class CMSTestUtil
         throws Exception
     {
         return  new X509AttributeCertificateHolder(CMSTestUtil.attrCert);
+    }
+
+    /**
+     * A name of n single-valued CN RDNs with distinct short values. The reordered form lists the
+     * same RDNs in reverse and as UTF8String rather than PrintableString, so it is equal to the
+     * plain form but encodes differently - the shape a sender uses to force a full comparison.
+     */
+    public static X500Name makeLargeName(int n, boolean reordered)
+    {
+        ASN1EncodableVector rdns = new ASN1EncodableVector();
+        for (int k = 0; k < n; k++)
+        {
+            String s = Integer.toString(reordered ? n - 1 - k : k, 36);
+            ASN1Encodable v = reordered ? (ASN1Encodable)new DERUTF8String(s) : new DERPrintableString(s);
+            rdns.add(new DERSet(new DERSequence(new ASN1Encodable[]{ BCStyle.CN, v })));
+        }
+        return X500Name.getInstance(new DERSequence(rdns));
+    }
+
+    /**
+     * The i-th of a family of serial numbers that all share one BigInteger.hashCode().
+     */
+    public static BigInteger collidingSerial(int i)
+    {
+        return BigInteger.valueOf(((long)i << 32) | ((12345 - 31 * i) & 0xffffffffL));
+    }
+
+    /**
+     * 2^log2n distinct OIDs under 1.3 whose ASN1ObjectIdentifier.hashCode() values coincide. The hash is
+     * a 257-multiplier fold over the content octets from the last to the first, so starting from a common
+     * tail each five-octet component position allows a birthday search for two encodings that leave the
+     * fold in the same state, after which every choice at every position gives the same hash.
+     */
+    public static ASN1ObjectIdentifier[] collidingOIDs(int log2n)
+    {
+        byte[] tail = { 0x06, 0x01, 0x04, 0x01, 0x7F };
+        int length = 1 + 5 * log2n + tail.length;
+        int state = foldHash(length + 1, tail);
+        byte[][][] pairs = new byte[log2n][][];
+        Random rnd = new Random(1);
+
+        for (int i = 0; i < log2n; i++)
+        {
+            pairs[i] = collidingPair(state, rnd);
+            state = foldHash(state, pairs[i][0]);
+        }
+
+        ASN1ObjectIdentifier[] oids = new ASN1ObjectIdentifier[1 << log2n];
+        for (int x = 0; x < oids.length; x++)
+        {
+            byte[] enc = new byte[2 + length];
+            enc[0] = 0x06;
+            enc[1] = (byte)length;
+            enc[2] = 0x2B;
+            int p = 3;
+            for (int i = log2n - 1; i >= 0; i--)
+            {
+                System.arraycopy(pairs[i][(x >> i) & 1], 0, enc, p, 5);
+                p += 5;
+            }
+            System.arraycopy(tail, 0, enc, p, tail.length);
+            oids[x] = ASN1ObjectIdentifier.getInstance(enc);
+        }
+
+        return oids;
+    }
+
+    private static int foldHash(int state, byte[] block)
+    {
+        for (int i = block.length - 1; i >= 0; i--)
+        {
+            state *= 257;
+            state ^= block[i];
+        }
+        return state;
+    }
+
+    private static byte[][] collidingPair(int state, Random rnd)
+    {
+        Map seen = new HashMap();
+        for (;;)
+        {
+            byte[] b = { (byte)(0x80 | (1 + rnd.nextInt(127))), (byte)(0x80 | rnd.nextInt(128)),
+                (byte)(0x80 | rnd.nextInt(128)), (byte)(0x80 | rnd.nextInt(128)), (byte)rnd.nextInt(128) };
+            Integer out = Integers.valueOf(foldHash(state, b));
+            byte[] prev = (byte[])seen.get(out);
+            if (prev != null && !Arrays.areEqual(prev, b))
+            {
+                return new byte[][]{ prev, b };
+            }
+            seen.put(out, b);
+        }
     }
 
     public static KeyPair makeKeyPair()
@@ -754,5 +860,106 @@ public class CMSTestUtil
         }
         
         return bOut.toByteArray();
+    }
+
+    public interface Timed
+    {
+        void run()
+            throws Exception;
+    }
+
+    /**
+     * Check that the large case, eight times the input of the small one, takes less than 24 times as
+     * long. The two are timed alternately, so a burst of load from the parallel test forks lands on
+     * both rather than on whichever happened to be running, and the fastest of five rounds is kept.
+     * A noisy comparison is repeated before it is reported: quadratic work grows about sixty-four
+     * times and so fails every attempt.
+     */
+    public static void assertLinearGrowth(String what, Timed small, Timed large)
+        throws Exception
+    {
+        long smallTime = 0;
+        long largeTime = 0;
+        for (int attempt = 0; attempt != 3; attempt++)
+        {
+            smallTime = Long.MAX_VALUE;
+            largeTime = Long.MAX_VALUE;
+            for (int round = 0; round != 5; round++)
+            {
+                smallTime = Math.min(smallTime, timeOf(small));
+                largeTime = Math.min(largeTime, timeOf(large));
+            }
+            if (largeTime < 24 * smallTime)
+            {
+                return;
+            }
+        }
+        assertLinearGrowth(what, smallTime, largeTime);
+    }
+
+    /**
+     * The time of one run, repeating it for at least 20ms so that a short run still measures
+     * something on the millisecond clock nanoTime() falls back to.
+     */
+    private static long timeOf(Timed timed)
+        throws Exception
+    {
+        long start = nanoTime();
+        long elapsed;
+        int count = 0;
+        do
+        {
+            timed.run();
+            count++;
+            elapsed = nanoTime() - start;
+        }
+        while (elapsed < 20000000L);
+        return elapsed / count;
+    }
+
+    private static final java.lang.reflect.Method NANO_TIME = findNanoTime();
+
+    private static java.lang.reflect.Method findNanoTime()
+    {
+        try
+        {
+            return System.class.getMethod("nanoTime", new Class[0]);
+        }
+        catch (Exception e)
+        {
+            return null;
+        }
+    }
+
+    /**
+     * System.nanoTime() where the runtime has it, otherwise currentTimeMillis() scaled to
+     * nanoseconds: nanoTime() arrived with Java 5 and these tests are also compiled and run by
+     * the jdk1.4 build.
+     */
+    public static long nanoTime()
+    {
+        if (NANO_TIME != null)
+        {
+            try
+            {
+                return ((Long)NANO_TIME.invoke(null, new Object[0])).longValue();
+            }
+            catch (Exception e)
+            {
+                // fall through to the millisecond clock
+            }
+        }
+        return System.currentTimeMillis() * 1000000L;
+    }
+
+    /**
+     * The "stay linear" checks compare an input against one eight times its size rather than
+     * against a wall-clock bound, which a slow or loaded machine exceeds: linear work grows about
+     * eight times, the quadratic forms these tests guard against about sixty-four times.
+     */
+    public static void assertLinearGrowth(String what, long smallTime, long largeTime)
+    {
+        Assert.assertTrue(what + " time grew by " + (largeTime / Math.max(smallTime, 1L)) + "x for 8x the input ("
+            + smallTime / 1000000 + "ms, " + largeTime / 1000000 + "ms)", largeTime < 24 * smallTime);
     }
 }

@@ -2,6 +2,7 @@ package org.bouncycastle.crypto.signers.mldsa;
 
 import java.security.SecureRandom;
 
+import org.bouncycastle.crypto.CryptoServicePurpose;
 import org.bouncycastle.crypto.digests.SHAKEDigest;
 import org.bouncycastle.crypto.params.MLDSAParameters;
 import org.bouncycastle.util.Arrays;
@@ -42,7 +43,7 @@ import org.bouncycastle.util.Arrays;
 public class MLDSAEngine
 {
     private final SecureRandom random;
-    final SHAKEDigest shake256Digest = new SHAKEDigest(256);
+    final SHAKEDigest shake256Digest = new SHAKEDigest(256, CryptoServicePurpose.INTERNAL);
 
     public final static int DilithiumN = 256;
     public final static int DilithiumQ = 8380417;
@@ -342,6 +343,17 @@ public class MLDSAEngine
         return encT1;
     }
 
+    public byte[] deriveTr(byte[] rho, byte[] encT1)
+    {
+        byte[] tr = new byte[TrBytes];
+
+        shake256Digest.update(rho, 0, rho.length);
+        shake256Digest.update(encT1, 0, encT1.length);
+        shake256Digest.doFinal(tr, 0, TrBytes);
+
+        return tr;
+    }
+
     public SHAKEDigest getShake256Digest()
     {
         return new SHAKEDigest(shake256Digest);
@@ -486,15 +498,6 @@ public class MLDSAEngine
 
         // TODO[pqc] Shouldn't this throw an exception here (or in caller)?
         return null;
-    }
-
-    public boolean verifyInternalMu(byte[] providedMu)
-    {
-        byte[] mu = new byte[CrhBytes];
-
-        shake256Digest.doFinal(mu, 0);
-
-        return Arrays.constantTimeAreEqual(mu, providedMu);
     }
 
     public boolean verifyInternalMuSignature(byte[] mu, byte[] sig, int siglen, SHAKEDigest shake256Digest, byte[] rho, byte[] encT1)

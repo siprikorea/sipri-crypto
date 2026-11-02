@@ -37,6 +37,7 @@ public class Properties
     public static final String OCSP_MAX_RESPONSE_AGE = "org.bouncycastle.ocsp.max_response_age";
     public static final String OPENPGP_MAX_ARMOR_HEADER_LENGTH = "org.bouncycastle.openpgp.max_armor_header_length";
     public static final String OPENPGP_MAX_ARMOR_HEADERS = "org.bouncycastle.openpgp.max_armor_headers";
+    public static final String OPENPGP_STRICT_PARTIAL_BODY_LENGTH = "org.bouncycastle.openpgp.strict_partial_body_length";
     public static final String PKCS12_ALLOW_SUN_SECRET_KEYS = "org.bouncycastle.pkcs12.allow_sun_secret_keys";
     public static final String PKCS1_STRICT_DIGESTINFO = "org.bouncycastle.pkcs1.strict_digestinfo";
     public static final String JSSE_HOSTNAME_CHECK_CN_FALLBACK = "org.bouncycastle.jsse.hostname_check_cn_fallback";
@@ -91,6 +92,38 @@ public class Properties
      * {@link #isOverrideSet(String, boolean)}.
      */
     public static final String CMS_ALLOW_LEGACY_KEYAGREE_KDF = "org.bouncycastle.cms.allow_legacy_keyagree_kdf";
+
+    /**
+     * The largest number of distinct digest algorithms BC will compute over the content of one
+     * SignedData message: the content digests CMSSignedData computes while its signers are verified
+     * (one per digest algorithm, shared by the signers using it) and the digest calculators
+     * CMSSignedDataParser runs over the content for the message's digestAlgorithms field. Each
+     * algorithm beyond the limit raises a CMSException. Unset or 0, the default, leaves the number
+     * unlimited, so the work a sender can demand is the content length times the algorithms it
+     * names. Read via {@link #asInteger(String, int)}.
+     */
+    public static final String CMS_MAX_DIGEST_ALGORITHMS = "org.bouncycastle.cms.max_digest_algorithms";
+
+    /**
+     * Whether a time-stamp token whose signing-time signed attribute disagrees with the genTime of its
+     * TSTInfo is accepted. Default false.
+     */
+    public static final String TSP_ALLOW_INCONSISTENT_SIGNING_TIME = "org.bouncycastle.tsp.allow_inconsistent_signing_time";
+
+    /**
+     * The hash algorithms (comma separated digest names or OIDs) accepted for a time-stamp token's message imprint.
+     */
+    public static final String TSP_ALLOWED_IMPRINT_ALGORITHMS = "org.bouncycastle.tsp.allowed_imprint_algorithms";
+
+    /**
+     * The default crypto services constraint: "nist", "log", "legacy", "reject" or "none" (the default).
+     */
+    public static final String CONSTRAINTS_QUANTUM_VULNERABLE = "org.bouncycastle.constraints.quantum_vulnerable";
+
+    /**
+     * Whether a constraint installed from a property at start-up may be replaced. Default false.
+     */
+    public static final String CONSTRAINTS_ALLOW_OVERRIDE = "org.bouncycastle.constraints.allow_override";
 
     private Properties()
     {

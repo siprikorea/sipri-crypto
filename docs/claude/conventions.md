@@ -8,6 +8,27 @@
 - Tests pass `-Dbc.test.data.home=<core/src/test/data>` for fixture lookups.
 - The `:test` task runs each test class in its own JVM (`forkEvery = 1`).
 
+## pg operator tests: three defaults that silently pick a different path
+
+Found while writing the RFC 9980 round-trip tests (`PGPRFC9980KeyPairTest`); each produced a confusing
+failure one layer away from the real cause.
+
+- **`BcPGPDataEncryptorBuilder` / `JcePGPDataEncryptorBuilder.setWithAEAD(...)` selects the LibrePGP
+  v5-style OCB packet, not the RFC 9580 v2 SEIPD.** Add `.setUseV6AEAD()` to get a v6 PKESK and v2
+  SEIPD; without it `PublicKeyKeyEncryptionMethodGenerator.generate` emits a v3 PKESK even for a v6 key.
+- **AEAD secret-key protection binds the key packet, tag included, as associated data.**
+  `PGPSecretKey(privKey, pubKey, ...)` turns an encryption-only key into a subkey packet whatever
+  `isMasterKey` says, so an encryptor built with `pubKey.getPublicKeyPacket()` of the primary form fails
+  on recovery with "mac check in OCB failed". Convert with `keyPair.asSubkey(fingerprintCalculator)`
+  first and build the encryptor from that packet.
+- **`PreferredAEADCiphersuites.builder(...)` always appends the mandatory AES-128/OCB explicitly**, so a
+  certificate built through it never has an unusable explicit AEAD list; a negotiation test that needs
+  one has to go through the v1 SEIPD path (Features with MDC only, symmetric preferences set directly).
+
+Note also that `pg` had no `TestResourceFinder` until 1.87 (its fixtures were inline); it now carries the
+same copy as the other modules under `pg/src/test/java/org/bouncycastle/test/`, reading
+`bc-test-data/openpgp/openpgp-pqc/rfc9980` for the RFC 9980 Appendix A vectors.
+
 ## Key agreement tests run with and without a UKM
 
 Any test of a CMS or JCA key agreement scheme should exercise it **both with and without a user
@@ -312,6 +333,10 @@ Any system or security property that controls BC behaviour belongs in `core/src/
 
 When supporting a non-standard wire encoding for interop with another implementation (e.g. SunJCE-shaped PKCS#12 secret keys per `Properties.PKCS12_ALLOW_SUN_SECRET_KEYS`, or vendor-specific TLS quirks), gate the new code path behind a `Properties.*` boolean and default it OFF. Keep the writer producing the standards-compliant form unconditionally — interop is a one-way concession on the read side, not a license to round-trip non-standard output. Cite the deviation in the property's javadoc (what's read, why it's gated, what BC writes instead) and reference the issue number in the release note so future maintainers can find the rationale.
 
+**Test interop reads against files the other implementation wrote, not a hand-built imitation.** A fixture assembled in the test encodes BC's *reading* of the foreign format, so it agrees with the parser by construction. The SunJCE secret-bag fixture in `PKCS12SecretKeyStoreTest` got the bag encoding right but placed it in an `encryptedData` ContentInfo where the JDK uses plain `data` - so the path every real JDK file takes was never tested - and it labelled the key `id_aes128_CBC` where the JDK writes the bare AES arc, hiding that real JDK keys came back named `2.16.840.1.101.3.4.1` (which SunJCE then refuses). Generate the files with the other implementation, commit them to `bc-test-data` together with the generator and a README (`pkix/pkcs12/jdk-secret-keys/` is the model), and cover each variant its writer produces (here: with a MAC, `store(out, null)` and `macAlgorithm=NONE`). Before writing the mapping, have the other implementation emit every algorithm it supports and diff its identifiers against BC's table: AES was only one of seven OIDs BC did not map.
+
+The JDK's PKCS12 keystore also has a per-entry password model that BC deliberately does not follow. The JDK decrypts each key in `getKey` with that entry's password. BC decrypts every bag at load time with the store password and ignores the password passed to `getKey`. So BC cannot load JDK stores written with a null store password or with entry passwords that differ. That is an accepted limitation, not a bug to fix.
+
 ## OpenPGP new vs legacy packet format
 
 OpenPGP packets can be emitted in the old (Legacy) or new (OpenPGP/current) header format. Each `org.bouncycastle.bcpg` packet object carries a `newPacketFormat` boolean (`Packet(tag, newPacketFormat)` → `hasNewPacketFormat()`), and `BCPGOutputStream` has a `PacketFormat`: `LEGACY` forces old, `CURRENT` forces new, and `ROUNDTRIP` (the default) honours each packet's own flag. So the emitted format is decided by the *packet's* flag only under `ROUNDTRIP`.
@@ -456,6 +481,8 @@ The rule applies symmetrically to URLs you delete: if you're removing the only c
 ## Code style
 
 Match the surrounding file: Allman braces (open brace on its own line for class / method / control structures), 4-space indentation, no tabs. Don't reformat untouched code while editing — diffs that include unrelated whitespace changes are noisy and slow review.
+
+In Javadoc, write `@throws`, not `@exception` (Error Prone prefers it; the Gradle-compiled trees were converted in one sweep, the legacy overlays and `jce/` were not).
 
 The brace convention is **machine-enforced** on every module's `src/main` by the Gradle `checkstyle` plugin against `config/checkstyle/checkstyle.xml`:
 

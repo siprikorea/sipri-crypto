@@ -22,12 +22,15 @@ public class AllTests
         
         suite.addTestSuite(CheckerTest.class);
         suite.addTestSuite(RevocationTest.class);
+        suite.addTestSuite(CrlReasonCodeTest.class);
         suite.addTestSuite(CheckNameConstraintsTest.class);
         suite.addTestSuite(IDPRelativeNameTest.class);
         suite.addTestSuite(QcStatementReviewerTest.class);
         suite.addTestSuite(PKIXCertPathReviewerPolicyTreeTest.class);
         suite.addTestSuite(PKIXCertPathReviewerCrlReasonTest.class);
         suite.addTestSuite(PKIXCertPathReviewerCrlScopeTest.class);
+        suite.addTestSuite(PKIXCertPathReviewerCrlDistPointTest.class);
+        suite.addTestSuite(TrustAnchorNameConstraintsTest.class);
 
         return new BCTestSetup(suite);
     }

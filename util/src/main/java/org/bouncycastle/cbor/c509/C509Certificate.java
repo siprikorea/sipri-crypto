@@ -27,7 +27,7 @@ import org.bouncycastle.util.BigIntegers;
 import org.bouncycastle.util.Exceptions;
 
 /**
- * A C509 certificate (Section 3 of draft-ietf-cose-cbor-encoded-cert-20):
+ * A C509 certificate (Section 3 of draft-ietf-cose-cbor-encoded-cert-21):
  * <pre>
  * C509Certificate = [ TBSCertificate, issuerSignatureValue: any ]
  * </pre>
@@ -190,12 +190,7 @@ public class C509Certificate
             throw new IOException("unsupported c509CertificateType: " + fields.certificateType);
         }
 
-        byte[] serialMagnitude = in.readByteString();
-        if (serialMagnitude.length > 0 && serialMagnitude[0] == 0)
-        {
-            throw new IOException("C509 certificateSerialNumber with leading zero octet");
-        }
-        fields.serialNumber = serialMagnitude;
+        fields.serialNumber = readSerialNumber(in);
 
         fields.issuerSignatureAlgorithm = C509AlgorithmIdentifier.parseSignatureAlgorithm(in);
 
@@ -225,6 +220,10 @@ public class C509Certificate
         }
 
         fields.subject = C509Name.parse(in);
+        if (fields.issuer != null && fields.issuer.equals(fields.subject))
+        {
+            throw new IOException("C509 issuer identical to the subject must be encoded as null");
+        }
         fields.subjectPublicKeyAlgorithm = C509AlgorithmIdentifier.parsePublicKeyAlgorithm(in);
         fields.subjectPublicKeyItem = in.readEncodedItem();
         fields.subjectPublicKeyInfo = C509PublicKeyCodec.decodeSubjectPublicKey(fields.subjectPublicKeyAlgorithm,
@@ -279,7 +278,8 @@ public class C509Certificate
      * @param certificateType {@link #TYPE_NATIVE} or {@link #TYPE_REENCODED_X509}.
      * @param serialNumber the certificate serial number, which must not be negative.
      * @param issuerSignatureAlgorithm the X.509 signature algorithm.
-     * @param issuer the issuer name, or null when identical to the subject.
+     * @param issuer the issuer name, or null when identical to the subject. An issuer is
+     *        carried as null only when its DER encoding is identical to the subject's.
      * @param notBefore start of validity.
      * @param notAfter end of validity, null standing for no well-defined expiration.
      * @param subject the subject name.
@@ -296,10 +296,7 @@ public class C509Certificate
         {
             throw new IOException("unsupported c509CertificateType: " + certificateType);
         }
-        if (serialNumber.signum() < 0)
-        {
-            throw new IOException("certificateSerialNumber must not be negative");
-        }
+        checkSerialNumber(serialNumber);
 
         C509AlgorithmIdentifier sigAlg = C509AlgorithmIdentifier.forSignatureAlgorithm(issuerSignatureAlgorithm);
         C509AlgorithmIdentifier pkAlg = C509AlgorithmIdentifier.forPublicKeyAlgorithm(
@@ -307,7 +304,9 @@ public class C509Certificate
 
         C509Name subjectName = fromX500NameChecked(subject);
         C509Name issuerName = null;
-        if (issuer != null && !issuer.equals(subject))
+        // null only for an octet-for-octet identical issuer (Section 3.1.4); X500Name.equals is too lenient
+        if (issuer != null
+            && !Arrays.areEqual(issuer.getEncoded(ASN1Encoding.DER), subject.getEncoded(ASN1Encoding.DER)))
         {
             issuerName = fromX500NameChecked(issuer);
         }
@@ -324,7 +323,7 @@ public class C509Certificate
         ByteArrayOutputStream bOut = new ByteArrayOutputStream();
         CBOREncoder out = new CBOREncoder(bOut);
         out.writeInteger(certificateType);
-        out.writeByteString(BigIntegers.asUnsignedByteArray(serialNumber));
+        writeSerialNumber(out, serialNumber);
         sigAlg.encodeTo(out);
         if (issuerName == null)
         {
@@ -492,6 +491,40 @@ public class C509Certificate
         return c509;
     }
 
+    /**
+     * Read a CertificateSerialNumber (Section 3.1.2 - the unsigned magnitude as a byte
+     * string), returning the magnitude.
+     */
+    static byte[] readSerialNumber(CBORDecoder in)
+        throws IOException
+    {
+        byte[] serialMagnitude = in.readByteString();
+        if (serialMagnitude.length > 0 && serialMagnitude[0] == 0)
+        {
+            throw new IOException("C509 certificateSerialNumber with leading zero octet");
+        }
+        return serialMagnitude;
+    }
+
+    static void checkSerialNumber(BigInteger serialNumber)
+        throws IOException
+    {
+        if (serialNumber.signum() < 0)
+        {
+            throw new IOException("certificateSerialNumber must not be negative");
+        }
+    }
+
+    /**
+     * Write a CertificateSerialNumber, which must already have been checked with
+     * {@link #checkSerialNumber}.
+     */
+    static void writeSerialNumber(CBOREncoder out, BigInteger serialNumber)
+        throws IOException
+    {
+        out.writeByteString(BigIntegers.asUnsignedByteArray(serialNumber));
+    }
+
     private static Certificate parseX509(byte[] derEncoding)
         throws IOException
     {
@@ -620,8 +653,8 @@ public class C509Certificate
     }
 
     /**
-     * Return the issuer name. In the C509 encoding an issuer identical to the subject
-     * is carried as null; this accessor resolves that back to the subject name.
+     * Return the issuer name. In the C509 encoding an issuer octet-for-octet identical
+     * to the subject is carried as null; this accessor resolves that back to the subject name.
      */
     public X500Name getIssuer()
     {
@@ -630,7 +663,7 @@ public class C509Certificate
 
     /**
      * Return true if the issuer field is carried as null, standing for an issuer
-     * identical to the subject (Section 3.1.4).
+     * octet-for-octet identical to the subject (Section 3.1.4).
      */
     public boolean isSelfIssued()
     {
@@ -690,8 +723,9 @@ public class C509Certificate
 
     /**
      * Return the signature value in its X.509 form: for an ECDSA style algorithm the
-     * DER SEQUENCE of the two INTEGERs, otherwise the BIT STRING value field
-     * unchanged. This is the form a ContentVerifier checks.
+     * DER SEQUENCE of the two INTEGERs, for an RFC 6955 proof-of-possession algorithm
+     * the DER DhSigStatic, otherwise the BIT STRING value field unchanged. This is the
+     * form a ContentVerifier checks.
      */
     public byte[] getSignature()
     {

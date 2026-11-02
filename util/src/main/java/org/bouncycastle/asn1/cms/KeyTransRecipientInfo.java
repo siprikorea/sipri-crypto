@@ -52,7 +52,7 @@ public class KeyTransRecipientInfo
     private KeyTransRecipientInfo(
         ASN1Sequence seq)
     {
-        if (seq.size() < 4)
+        if (seq.size() != 4)
         {
             throw new IllegalArgumentException("expected sequence size of 4");
         }
@@ -74,7 +74,7 @@ public class KeyTransRecipientInfo
      * </ul>
      *
      * @param obj the object we want converted.
-     * @exception IllegalArgumentException if the object cannot be converted.
+     * @throws IllegalArgumentException if the object cannot be converted.
      */
     public static KeyTransRecipientInfo getInstance(
         Object obj)

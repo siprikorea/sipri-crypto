@@ -107,7 +107,7 @@ public class CMSEnvelopedDataParser
             //
             // read the recipients
             //
-            ASN1Set recipientInfos = ASN1Set.getInstance(this.envelopedData.getRecipientInfos().toASN1Primitive());
+            ASN1Set recipientInfos = ASN1Set.getInstance(this.envelopedData.getRecipientInfos().getLoadedObject());
 
             //
             // read the encrypted content info
@@ -194,7 +194,7 @@ public class CMSEnvelopedDataParser
     /**
      * return a table of the unprotected attributes indexed by
      * the OID of the attribute.
-     * @exception IOException 
+     * @throws IOException 
      */
     public AttributeTable getUnprotectedAttributes() 
         throws IOException

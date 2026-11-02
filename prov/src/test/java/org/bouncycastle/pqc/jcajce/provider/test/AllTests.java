@@ -43,10 +43,12 @@ public class AllTests
         suite.addTestSuite(XMSSTest.class);
         suite.addTestSuite(XMSSMTTest.class);
         suite.addTestSuite(LMSTest.class);
+        suite.addTestSuite(DeprecatedHashBasedKeyInterfaceTest.class);
         suite.addTestSuite(SLHDSAKeyPairGeneratorTest.class);
         suite.addTestSuite(SLHDSATest.class);
         suite.addTestSuite(CMCEKEMTest.class);
         suite.addTestSuite(FrodoKEMTest.class);
+        suite.addTestSuite(XWingKEMTest.class);
         suite.addTestSuite(SABERTest.class);
         suite.addTestSuite(SABERKeyPairGeneratorTest.class);
         suite.addTestSuite(FalconTest.class);
@@ -60,6 +62,7 @@ public class AllTests
         suite.addTestSuite(MLKEMTest.class);
         suite.addTestSuite(MLKEMKeyPairGeneratorTest.class);
         suite.addTestSuite(MLDSAKeyPairGeneratorTest.class);
+        suite.addTestSuite(PQCDefaultRandomTest.class);
         suite.addTestSuite(MLDSATest.class);
         suite.addTestSuite(BIKEKeyPairGeneratorTest.class);
         suite.addTestSuite(BIKETest.class);

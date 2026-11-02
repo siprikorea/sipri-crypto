@@ -59,7 +59,12 @@ public class TimeStampedData
         {
             this.content = ASN1OctetString.getInstance(seq.getObjectAt(index++));
         }
-        this.temporalEvidence = Evidence.getInstance(seq.getObjectAt(index));
+        this.temporalEvidence = Evidence.getInstance(seq.getObjectAt(index++));
+
+        if (index != seq.size())
+        {
+            throw new IllegalArgumentException("unexpected element at position " + index);
+        }
     }
 
     /**
@@ -73,7 +78,7 @@ public class TimeStampedData
      * </ul>
      *
      * @param obj the object we want converted.
-     * @exception IllegalArgumentException if the object cannot be converted.
+     * @throws IllegalArgumentException if the object cannot be converted.
      */
     public static TimeStampedData getInstance(Object obj)
     {

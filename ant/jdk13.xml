@@ -84,6 +84,7 @@
                 <exclude name="**/asymmetric/DSTU*.java" />
                 <exclude name="**/asymmetric/dstu/*.java" />
                 <exclude name="**/Logging*.java" />
+                <exclude name="**/QuantumVulnerable*.java" />
                 <exclude name="**/provider/config/PKCS12StoreParameter.java" />
                 <exclude name="**/COMPOSITE.java"/>
                 <exclude name="**/gemss/*.java"/>
@@ -144,6 +145,7 @@
                 <exclude name="**/legacy/**/NTRU*.java" />
                 <exclude name="**/XMSS*.java" />
                 <exclude name="**/spec/LMS*.java" />
+                <exclude name="**/interfaces/LMS*.java" />
                 <exclude name="**/IndexGenerator.java" />
                 <exclude name="**/legacy/**/ntru/**/*.java" />
                 <exclude name="**/xmss/**/*.java" />
@@ -258,6 +260,8 @@
             </fileset>
             <fileset dir="core/src/test/java">
                 <exclude name="**/MQVTest.java" />
+                <exclude name="**/crypto/test/PQCConstraintsTest.java" />
+                <exclude name="**/crypto/test/QuantumVulnerableConstraintTest.java" />
                 <exclude name="**/ECDSA5Test.java" />
                 <exclude name="**/NamedCurveTest.java" />
                 <exclude name="**/nist/NistCertPathTest.java" />
@@ -362,10 +366,8 @@
                 <exclude name="**/pqc/crypto/test/AllTestsSQIsign.java" />
                 <exclude name="**/pqc/crypto/test/AllTestsSQIsignLvl5.java" />
                 <exclude name="**/pqc/crypto/test/AllTestsSLHDSASigGen.java" />
-                <exclude name="**/pqc/crypto/test/AllTestsXMSSMT.java" />
                 <exclude name="**/pqc/crypto/test/AllTestsSLHDSA.java" />
                 <exclude name="**/pqc/crypto/test/AllTestsSnova.java" />
-                <exclude name="**/pqc/crypto/test/AllTestsXMSS.java" />
                 <exclude name="**/crypto/test/AllTestsSlow.java" />
                 <exclude name="**/crypto/test/AllTestsOpenBSDBCrypt.java" />
                 <exclude name="**/crypto/test/AllTestsArgon.java" />
@@ -462,6 +464,9 @@
                 <exclude name="**/bouncycastle/cms/test/CMSAuthEnvelopedDataStreamGeneratorTest.java"/>
                 <exclude name="**/bouncycastle/cms/test/GOSTR3410_2012_256CmsSignVerifyDetached.java"/>
                 <exclude name="**/bouncycastle/cert/test/GOSTR3410_2012_256GenerateCertificate.java"/>
+                <!-- parity with ant/jdk14.xml: composite signatures are not in this provider, and the
+                     test needs composite key constructors the jdk1.4 overlays lack -->
+                <exclude name="**/cms/test/CompositeMLDSASignedDataTest.java"/>
                 <exclude name="**/its/**" />
                 <!-- parity with ant/jdk14.xml: the cades main-source excludes above (CAdESLevel*,
                      CAdESLongTermValuesUtil, CAdESArchiveTimestampUtil) leave org.bouncycastle.cades
@@ -486,6 +491,8 @@
                 <exclude name="**/cert/ocsp/test/PKIXOcspRevocationCheckerTest.java"/>
                 <exclude name="**/pkcs/test/PBETest.java"/>
                 <exclude name="**/pkix/test/PKIXCertPathReviewerCrlReasonTest.java"/>
+                <exclude name="**/pkix/test/PKIXCertPathReviewerCrlDistPointTest.java"/>
+                <exclude name="**/pkix/test/TrustAnchorNameConstraintsTest.java"/>
                 <!-- test files using X500Principal / getIssuerX500Principal / getCause() / Java
                      1.4+ CertPath APIs (java.security.cert.TrustAnchor, CollectionCertStoreParameters) -->
                 <exclude name="**/cert/test/PQCCertTest.java"/>

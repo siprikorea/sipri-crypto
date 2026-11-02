@@ -33,10 +33,12 @@ import org.bouncycastle.asn1.cmp.PKIStatus;
 import org.bouncycastle.asn1.cms.Attribute;
 import org.bouncycastle.asn1.cms.AttributeTable;
 import org.bouncycastle.asn1.cms.Attributes;
+import org.bouncycastle.asn1.cms.CMSAttributes;
 import org.bouncycastle.asn1.cms.CMSObjectIdentifiers;
 import org.bouncycastle.asn1.cms.ContentInfo;
 import org.bouncycastle.asn1.cms.SignedData;
 import org.bouncycastle.asn1.cms.SignerInfo;
+import org.bouncycastle.asn1.cms.Time;
 import org.bouncycastle.asn1.ess.ESSCertID;
 import org.bouncycastle.asn1.ess.ESSCertIDv2;
 import org.bouncycastle.asn1.ess.SigningCertificate;
@@ -60,6 +62,7 @@ import org.bouncycastle.cms.CMSAttributeTableGenerationException;
 import org.bouncycastle.cms.CMSAttributeTableGenerator;
 import org.bouncycastle.cms.CMSSignedData;
 import org.bouncycastle.cms.DefaultSignedAttributeTableGenerator;
+import org.bouncycastle.cms.SignerInformationVerifier;
 import org.bouncycastle.cms.jcajce.JcaSignerInfoGeneratorBuilder;
 import org.bouncycastle.cms.jcajce.JcaSimpleSignerInfoGeneratorBuilder;
 import org.bouncycastle.cms.jcajce.JcaSimpleSignerInfoVerifierBuilder;
@@ -81,6 +84,7 @@ import org.bouncycastle.tsp.TimeStampToken;
 import org.bouncycastle.tsp.TimeStampTokenGenerator;
 import org.bouncycastle.tsp.TimeStampTokenInfo;
 import org.bouncycastle.util.Arrays;
+import org.bouncycastle.util.Properties;
 import org.bouncycastle.util.Store;
 import org.bouncycastle.util.encoders.Base64;
 
@@ -1284,6 +1288,269 @@ public class NewTSPTest
         {
             assertEquals("signing certificate attribute MUST contain at least one AttributeValue", e.getMessage());
         }
+    }
+
+    /**
+     * A signing-time signed attribute is the TSA's own statement of when it signed, as genTime is: a generated
+     * token carries the genTime it was given as its signing-time rather than the clock, and a token in which the
+     * two disagree is rejected on construction.
+     */
+    public void testSigningTimeAgreesWithGenTime()
+        throws Exception
+    {
+        String signDN = "O=Bouncy Castle, C=AU";
+        KeyPair signKP = TSPTestUtil.makeKeyPair();
+        X509Certificate signCert = TSPTestUtil.makeCACertificate(signKP, signDN, signKP, signDN);
+
+        String origDN = "CN=Eric H. Echidna, E=eric@bouncycastle.org, O=Bouncy Castle, C=AU";
+        KeyPair origKP = TSPTestUtil.makeKeyPair();
+        X509Certificate origCert = TSPTestUtil.makeCertificate(origKP, origDN, signKP, signDN);
+
+        List certList = new ArrayList();
+        certList.add(origCert);
+        certList.add(signCert);
+
+        Store certs = new JcaCertStore(certList);
+
+        TimeStampTokenGenerator tsTokenGen = new TimeStampTokenGenerator(
+            new JcaSimpleSignerInfoGeneratorBuilder().build("SHA256withRSA", origKP.getPrivate(), origCert), new SHA256DigestCalculator(), new ASN1ObjectIdentifier("1.2"));
+
+        tsTokenGen.addCertificates(certs);
+        tsTokenGen.setAccuracySeconds(1);
+
+        TimeStampRequestGenerator reqGen = new TimeStampRequestGenerator();
+        TimeStampRequest request = reqGen.generate(TSPAlgorithms.SHA256, new byte[32], BigInteger.valueOf(100));
+
+        TimeStampResponseGenerator tsRespGen = new TimeStampResponseGenerator(tsTokenGen, TSPAlgorithms.ALLOWED);
+
+        // a genTime well away from the clock (but inside the certificate's validity): the generator's signing-time must follow it, not the clock.
+        Date genTime = new Date((System.currentTimeMillis() / 1000) * 1000 + 60 * 60 * 1000L);
+        TimeStampResponse tsResp = tsRespGen.generate(request, new BigInteger("23"), genTime);
+
+        TimeStampToken token = tsResp.getTimeStampToken();
+
+        Attribute signingTimeAttr = token.getSignedAttributes().get(CMSAttributes.signingTime);
+        assertNotNull("no signing-time attribute on generated token", signingTimeAttr);
+        assertEquals(genTime, Time.getInstance(signingTimeAttr.getAttrValues().getObjectAt(0)).getDate());
+        assertEquals(genTime, token.getTimeStampInfo().getGenTime());
+
+        token.validate(new JcaSimpleSignerInfoVerifierBuilder().setProvider(BC).build(origCert));
+
+        // within the accuracy plus allowance is still a consistent token; beyond it is not.
+        assertNotNull(withSigningTime(token, new Date(genTime.getTime() + 60 * 1000L + 1000L)));
+        assertNotNull(withSigningTime(token, new Date(genTime.getTime() - 60 * 1000L - 1000L)));
+
+        Date[] inconsistent = new Date[]{
+            new Date(genTime.getTime() + 60 * 1000L + 2000L),
+            new Date(genTime.getTime() - 60 * 1000L - 2000L),
+            new Date() };
+
+        for (int i = 0; i != inconsistent.length; i++)
+        {
+            try
+            {
+                withSigningTime(token, inconsistent[i]);
+                fail("no exception on inconsistent signing-time " + inconsistent[i]);
+            }
+            catch (TSPValidationException e)
+            {
+                assertEquals("signing-time attribute does not agree with genTime.", e.getMessage());
+            }
+
+            System.setProperty(Properties.TSP_ALLOW_INCONSISTENT_SIGNING_TIME, "true");
+            try
+            {
+                assertEquals(inconsistent[i].getTime() / 1000, Time.getInstance(withSigningTime(token, inconsistent[i]).getSignedAttributes().get(CMSAttributes.signingTime).getAttrValues().getObjectAt(0)).getDate().getTime() / 1000);
+            }
+            finally
+            {
+                System.setProperty(Properties.TSP_ALLOW_INCONSISTENT_SIGNING_TIME, "false");
+            }
+        }
+    }
+
+    /**
+     * Rewrite the token's single SignerInfo with the given signing-time (the signature is left as is, the
+     * construction-time checks do not depend on it).
+     */
+    private TimeStampToken withSigningTime(TimeStampToken token, Date signingTime)
+        throws Exception
+    {
+        SignedData signedData = SignedData.getInstance(token.toCMSSignedData().toASN1Structure().getContent());
+
+        SignerInfo signerInfo = SignerInfo.getInstance(signedData.getSignerInfos().getObjectAt(0));
+
+        ASN1EncodableVector rebuilt = new ASN1EncodableVector();
+        Attribute[] attrArr = Attributes.getInstance(signerInfo.getAuthenticatedAttributes()).getAttributes();
+        for (int i = 0; i != attrArr.length; i++)
+        {
+            if (attrArr[i].getAttrType().equals(CMSAttributes.signingTime))
+            {
+                rebuilt.add(new Attribute(CMSAttributes.signingTime, new DERSet(new Time(signingTime))));
+            }
+            else
+            {
+                rebuilt.add(attrArr[i]);
+            }
+        }
+
+        SignerInfo rewritten = new SignerInfo(
+            signerInfo.getSID(),
+            signerInfo.getDigestAlgorithm(),
+            new Attributes(rebuilt),
+            signerInfo.getDigestEncryptionAlgorithm(),
+            signerInfo.getEncryptedDigest(),
+            signerInfo.getUnauthenticatedAttributes() == null ? null : Attributes.getInstance(signerInfo.getUnauthenticatedAttributes()));
+
+        SignedData rewrittenSignedData = new SignedData(
+            signedData.getDigestAlgorithms(),
+            signedData.getEncapContentInfo(),
+            signedData.getCertificates(),
+            signedData.getCRLs(),
+            new DERSet(rewritten));
+
+        return new TimeStampToken(new ContentInfo(CMSObjectIdentifiers.signedData, rewrittenSignedData));
+    }
+
+    /**
+     * A token whose message imprint uses a hash outside TSPAlgorithms.ALLOWED is rejected by default.
+     */
+    public void testLegacyImprintAlgorithm()
+        throws Exception
+    {
+        String signDN = "O=Bouncy Castle, C=AU";
+        KeyPair signKP = TSPTestUtil.makeKeyPair();
+        X509Certificate signCert = TSPTestUtil.makeCACertificate(signKP, signDN, signKP, signDN);
+
+        String origDN = "CN=Eric H. Echidna, E=eric@bouncycastle.org, O=Bouncy Castle, C=AU";
+        KeyPair origKP = TSPTestUtil.makeKeyPair();
+        X509Certificate origCert = TSPTestUtil.makeCertificate(origKP, origDN, signKP, signDN);
+
+        List certList = new ArrayList();
+        certList.add(origCert);
+        certList.add(signCert);
+
+        TimeStampTokenGenerator tsTokenGen = new TimeStampTokenGenerator(
+            new JcaSimpleSignerInfoGeneratorBuilder().build("SHA256withRSA", origKP.getPrivate(), origCert), new SHA256DigestCalculator(), new ASN1ObjectIdentifier("1.2"));
+
+        tsTokenGen.addCertificates(new JcaCertStore(certList));
+
+        TimeStampRequestGenerator reqGen = new TimeStampRequestGenerator();
+        TimeStampRequest md5Request = reqGen.generate(TSPAlgorithms.MD5, new byte[16], BigInteger.valueOf(100));
+
+        TimeStampResponse rejected = new TimeStampResponseGenerator(tsTokenGen, TSPAlgorithms.ALLOWED).generate(md5Request, new BigInteger("23"), new Date());
+        assertEquals(PKIStatus.REJECTION, rejected.getStatus());
+        assertNull(rejected.getTimeStampToken());
+
+        TimeStampToken md5Token = new TimeStampResponseGenerator(tsTokenGen, TSPAlgorithms.LEGACY).generate(md5Request, new BigInteger("23"), new Date()).getTimeStampToken();
+
+        SignerInformationVerifier verifier = new JcaSimpleSignerInfoVerifierBuilder().setProvider(BC).build(origCert);
+
+        try
+        {
+            md5Token.validate(verifier);
+            fail("MD5 imprint accepted by default");
+        }
+        catch (TSPValidationException e)
+        {
+            assertEquals("message imprint algorithm not allowed.", e.getMessage());
+            assertEquals(PKIFailureInfo.badAlg, e.getFailureCode());
+        }
+
+        try
+        {
+            md5Token.validate(verifier, TSPAlgorithms.ALLOWED);
+            fail("MD5 imprint accepted under ALLOWED");
+        }
+        catch (TSPValidationException e)
+        {
+            assertEquals(PKIFailureInfo.badAlg, e.getFailureCode());
+        }
+
+        md5Token.validate(verifier, TSPAlgorithms.LEGACY);
+
+        System.setProperty(Properties.TSP_ALLOWED_IMPRINT_ALGORITHMS, "SHA-256, md5");
+        try
+        {
+            md5Token.validate(verifier);
+        }
+        finally
+        {
+            System.getProperties().remove(Properties.TSP_ALLOWED_IMPRINT_ALGORITHMS);
+        }
+
+        // a caller's own set narrower than ALLOWED.
+        Set sha512Only = new HashSet();
+        sha512Only.add(TSPAlgorithms.SHA512);
+
+        TimeStampToken sha256Token = new TimeStampResponseGenerator(tsTokenGen, TSPAlgorithms.ALLOWED).generate(
+            reqGen.generate(TSPAlgorithms.SHA256, new byte[32], BigInteger.valueOf(101)), new BigInteger("24"), new Date()).getTimeStampToken();
+
+        sha256Token.validate(verifier);
+        try
+        {
+            sha256Token.validate(verifier, sha512Only);
+            fail("SHA-256 imprint accepted under a SHA-512 only set");
+        }
+        catch (TSPValidationException e)
+        {
+            assertEquals(PKIFailureInfo.badAlg, e.getFailureCode());
+        }
+
+        // the property narrows the default as well as widening it, and takes OIDs as well as names.
+        String[] sha512Lists = new String[]{ "SHA512", TSPAlgorithms.SHA512.getId() };
+        for (int i = 0; i != sha512Lists.length; i++)
+        {
+            System.setProperty(Properties.TSP_ALLOWED_IMPRINT_ALGORITHMS, sha512Lists[i]);
+            try
+            {
+                sha256Token.validate(verifier);
+                fail("SHA-256 imprint accepted with property " + sha512Lists[i]);
+            }
+            catch (TSPValidationException e)
+            {
+                assertEquals(PKIFailureInfo.badAlg, e.getFailureCode());
+            }
+            finally
+            {
+                System.getProperties().remove(Properties.TSP_ALLOWED_IMPRINT_ALGORITHMS);
+            }
+        }
+
+        // an unknown name is an error rather than being ignored.
+        System.setProperty(Properties.TSP_ALLOWED_IMPRINT_ALGORITHMS, "SHA-256,SHA-257");
+        try
+        {
+            sha256Token.validate(verifier);
+            fail("unknown digest name accepted");
+        }
+        catch (TSPValidationException e)
+        {
+            fail("unknown digest name reported as a validation failure");
+        }
+        catch (TSPException e)
+        {
+            assertEquals("unknown digest algorithm in " + Properties.TSP_ALLOWED_IMPRINT_ALGORITHMS + ": sha-257", e.getMessage());
+        }
+        finally
+        {
+            System.getProperties().remove(Properties.TSP_ALLOWED_IMPRINT_ALGORITHMS);
+        }
+
+        Set[] shared = new Set[]{ TSPAlgorithms.ALLOWED, TSPAlgorithms.LEGACY };
+        for (int i = 0; i != shared.length; i++)
+        {
+            try
+            {
+                shared[i].add(TSPAlgorithms.MD5);
+                fail("shared algorithm set is modifiable");
+            }
+            catch (UnsupportedOperationException e)
+            {
+                // expected
+            }
+        }
+        assertFalse(TSPAlgorithms.ALLOWED.contains(TSPAlgorithms.MD5));
     }
 
     public void testNoSignedAttributes()

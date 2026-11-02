@@ -117,7 +117,7 @@ public final class BouncyCastleProvider extends Provider
             service("Rijndael", 256), service("Salsa20", 128), service("SEED", 128), service("Serpent", 256), service("Shacal2", 128),
             service("Skipjack", 80), service("SM4", 128), service("TEA", 128), service("Twofish", 256), service("Threefish", 128),
             service("VMPC", 128), service("VMPCKSA3", 128), service("XTEA", 128), service("XSalsa20", 128), service("XChaCha", 128), service("OpenSSLPBKDF", 128),
-            service("DSTU7624", 256), service("GOST3412_2015", 256), service("Zuc", 128)
+            service("DSTU7624", 256), service("GOST3412_2015", 256), service("Zuc", 128), service("Ascon", 128)
         };
 
     /*
@@ -135,7 +135,7 @@ public final class BouncyCastleProvider extends Provider
     private static final String[] ASYMMETRIC_CIPHERS =
         {
             "DSA", "DH", "EC", "RSA", "GOST", "ECGOST", "ElGamal", "DSTU4145", "GM", "EdEC", "LMS", "XMSS", "NTRU", "Falcon", "CONTEXT", "SLHDSA", "MLDSA", "MLKEM",
-            "CMCE", "FrodoKEM", "CompositeKEMs"
+            "CMCE", "FrodoKEM", "XWing", "CompositeKEMs"
         };
 
     /*
@@ -146,7 +146,7 @@ public final class BouncyCastleProvider extends Provider
         {
             "GOST3411", "Keccak", "MD2", "MD4", "MD5", "SHA1", "RIPEMD128", "RIPEMD160", "RIPEMD256", "RIPEMD320", "SHA224",
             "SHA256", "SHA384", "SHA512", "SHA3", "Skein", "SM3", "Tiger", "Whirlpool", "Blake2b", "Blake2s", "DSTU7564",
-            "Haraka", "Blake3"
+            "Haraka", "Blake3", "Ascon"
         };
 
     /*
@@ -173,7 +173,7 @@ public final class BouncyCastleProvider extends Provider
     private static final String KDF_PACKAGE = "org.bouncycastle.jcajce.provider.kdf.";
     private static final String[] KDFS =
         {
-            "HKDF", "PBKDF2", "SCRYPT"
+            "HKDF", "PBKDF2", "SCRYPT", "ONESTEP", "KBKDF", "KMAC"
         };
 
 

@@ -51,6 +51,7 @@ public class RegressionTest
         new AuthorityKeyIdentifierTest(),
         new TBSCertListTest(),
         new TBSCertificateIssuerTest(),
+        new SequenceFieldOrderTest(),
         new AttributeCertificateInfoIssuerTest(),
         new ParseTest(),
         new ParsingTest(),

@@ -33,16 +33,21 @@ import org.bouncycastle.asn1.cmc.test.TaggedAttributeTest;
 import org.bouncycastle.asn1.cmc.test.TaggedCertificationRequestTest;
 import org.bouncycastle.asn1.cmc.test.TaggedContentInfoTest;
 import org.bouncycastle.asn1.cmc.test.TaggedRequestTest;
+import org.bouncycastle.asn1.cmp.test.CMPSequenceFieldOrderTest;
 import org.bouncycastle.asn1.cmp.test.CertifiedKeyPairTest;
 import org.bouncycastle.asn1.cmp.test.PKIFailureInfoTest;
 import org.bouncycastle.asn1.cmp.test.PollReqContentTest;
 import org.bouncycastle.asn1.cms.test.AttributeTableUnitTest;
+import org.bouncycastle.asn1.cms.test.CMSSequenceFieldOrderTest;
 import org.bouncycastle.asn1.cms.test.CMSTest;
 import org.bouncycastle.asn1.cms.test.ContentTypeSequenceSizeTest;
 import org.bouncycastle.asn1.cms.test.SignerInfoTest;
+import org.bouncycastle.asn1.crmf.test.CRMFSequenceFieldOrderTest;
 import org.bouncycastle.asn1.crmf.test.DhSigStaticTest;
 import org.bouncycastle.asn1.crmf.test.PKIPublicationInfoTest;
+import org.bouncycastle.asn1.dvcs.test.DVCSSequenceFieldOrderTest;
 import org.bouncycastle.asn1.esf.test.CommitmentTypeIndicationUnitTest;
+import org.bouncycastle.asn1.esf.test.ESFSequenceFieldOrderTest;
 import org.bouncycastle.asn1.esf.test.CommitmentTypeQualifierUnitTest;
 import org.bouncycastle.asn1.esf.test.SignerLocationUnitTest;
 import org.bouncycastle.asn1.ess.test.ContentHintsUnitTest;
@@ -57,6 +62,7 @@ import org.bouncycastle.asn1.isismtt.test.AdmissionSyntaxUnitTest;
 import org.bouncycastle.asn1.isismtt.test.AdmissionsUnitTest;
 import org.bouncycastle.asn1.isismtt.test.CertHashUnitTest;
 import org.bouncycastle.asn1.isismtt.test.DeclarationOfMajorityUnitTest;
+import org.bouncycastle.asn1.isismtt.test.ISISMTTSequenceFieldOrderTest;
 import org.bouncycastle.asn1.isismtt.test.MonetaryLimitUnitTest;
 import org.bouncycastle.asn1.isismtt.test.NamingAuthorityUnitTest;
 import org.bouncycastle.asn1.isismtt.test.ProcurationSyntaxUnitTest;
@@ -64,6 +70,7 @@ import org.bouncycastle.asn1.isismtt.test.RequestedCertificateUnitTest;
 import org.bouncycastle.asn1.isismtt.test.RestrictionUnitTest;
 import org.bouncycastle.asn1.microsoft.test.TimeStampRequestTest;
 import org.bouncycastle.asn1.smime.test.SMIMETest;
+import org.bouncycastle.asn1.tsp.test.TSPSequenceFieldOrderTest;
 import org.bouncycastle.util.test.SimpleTest;
 import org.bouncycastle.util.test.Test;
 
@@ -108,15 +115,20 @@ public class RegressionTest
         new CertifiedKeyPairTest(),
         new PKIFailureInfoTest(),
         new PollReqContentTest(),
+        new CMPSequenceFieldOrderTest(),
         new AttributeTableUnitTest(),
         new CMSTest(),
         new SignerInfoTest(),
+        new CMSSequenceFieldOrderTest(),
         new ContentTypeSequenceSizeTest(),
         new DhSigStaticTest(),
         new PKIPublicationInfoTest(),
+        new DVCSSequenceFieldOrderTest(),
+        new CRMFSequenceFieldOrderTest(),
         new CommitmentTypeIndicationUnitTest(),
         new CommitmentTypeQualifierUnitTest(),
         new SignerLocationUnitTest(),
+        new ESFSequenceFieldOrderTest(),
         new ContentHintsUnitTest(),
         new ESSCertIDv2UnitTest(),
         new OtherCertIDUnitTest(),
@@ -132,10 +144,13 @@ public class RegressionTest
         new MonetaryLimitUnitTest(),
         new NamingAuthorityUnitTest(),
         new ProcurationSyntaxUnitTest(),
+        new ISISMTTSequenceFieldOrderTest(),
         new RequestedCertificateUnitTest(),
         new RestrictionUnitTest(),
         new TimeStampRequestTest(),
         new SMIMETest(),
+        new TSPSequenceFieldOrderTest(),
+        new MiscSequenceFieldOrderTest(),
     };
 
     public static void main(String[] args)

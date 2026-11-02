@@ -41,6 +41,8 @@ public class GCMBlockCipher
     private byte[]              J0;
 
     // These fields are modified during processing
+    // The CTR output buffer is cleared before each processing call returns, including on failure.
+    private final byte[] ctrBlock = new byte[BLOCK_SIZE];
     private byte[]      bufBlock;
     private byte[]      macBlock;
     private byte[]      S, S_at, S_atPre;
@@ -128,7 +130,8 @@ public class GCMBlockCipher
     {
         this.forEncryption = forEncryption;
         this.macBlock = null;
-        this.initialised = true;
+        // a refused or failed init must leave the cipher unusable, not armed with the previous key and nonce
+        this.initialised = false;
 
         KeyParameter keyParameter = null;
         byte[] newNonce = null;
@@ -195,12 +198,6 @@ public class GCMBlockCipher
             }
         }
 
-        nonce = newNonce;
-        if (keyParameter != null)
-        {
-            lastKey = keyParameter.getKey();
-        }
-
         // TODO Restrict macSize to 16 if nonce length not 12?
 
         // Cipher always used in forward mode
@@ -219,6 +216,13 @@ public class GCMBlockCipher
         else if (this.H == null)
         {
             throw new IllegalArgumentException("Key must be specified in initial init");
+        }
+
+        // only an init that has succeeded is remembered for the nonce-reuse check
+        nonce = newNonce;
+        if (keyParameter != null)
+        {
+            lastKey = keyParameter.getKey();
         }
 
         this.J0 = new byte[BLOCK_SIZE];
@@ -247,6 +251,8 @@ public class GCMBlockCipher
         this.blocksRemaining = -2;      // page 8, len(P) <= 2^39 - 256, 1 block used by tag but done on J0
         this.bufOff = 0;
         this.totalLength = 0;
+
+        this.initialised = true;
 
         if (initialAssociatedText != null)
         {
@@ -367,18 +373,25 @@ public class GCMBlockCipher
         bufBlock[bufOff] = in;
         if (++bufOff == bufBlock.length)
         {
-            if (forEncryption)
+            try
             {
-                encryptBlock(bufBlock, 0, out, outOff);
-                bufOff = 0;
+                if (forEncryption)
+                {
+                    encryptBlock(bufBlock, 0, out, outOff);
+                    bufOff = 0;
+                }
+                else
+                {
+                    decryptBlock(bufBlock, 0, out, outOff);
+                    System.arraycopy(bufBlock, BLOCK_SIZE, bufBlock, 0, macSize);
+                    bufOff = macSize;
+                }
+                return BLOCK_SIZE;
             }
-            else
+            finally
             {
-                decryptBlock(bufBlock, 0, out, outOff);
-                System.arraycopy(bufBlock, BLOCK_SIZE, bufBlock, 0, macSize);
-                bufOff = macSize;
+                Arrays.fill(ctrBlock, (byte)0);
             }
-            return BLOCK_SIZE;
         }
         return 0;
     }
@@ -398,6 +411,19 @@ public class GCMBlockCipher
             System.arraycopy(out, inOff, in, 0, len);
             inOff = 0;
         }
+
+        try
+        {
+            return processBytesInternal(in, inOff, len, out, outOff);
+        }
+        finally
+        {
+            Arrays.fill(ctrBlock, (byte)0);
+        }
+    }
+
+    private int processBytesInternal(byte[] in, int inOff, int len, byte[] out, int outOff)
+    {
         int resultLen = 0;
 
         if (forEncryption)
@@ -485,6 +511,19 @@ public class GCMBlockCipher
     {
         checkStatus();
 
+        try
+        {
+            return doFinalInternal(out, outOff);
+        }
+        finally
+        {
+            Arrays.fill(ctrBlock, (byte)0);
+        }
+    }
+
+    private int doFinalInternal(byte[] out, int outOff)
+        throws InvalidCipherTextException
+    {
         if (totalLength == 0)
         {
             initCipher();
@@ -658,7 +697,6 @@ public class GCMBlockCipher
             initCipher();
         }
 
-        byte[] ctrBlock = new byte[BLOCK_SIZE];
         getNextCTRBlock(ctrBlock);
 
         gHASHBlock(S, buf, bufOff);
@@ -678,8 +716,6 @@ public class GCMBlockCipher
             initCipher();
         }
 
-        byte[] ctrBlock = new byte[BLOCK_SIZE];
-
         getNextCTRBlock(ctrBlock);
         GCMUtil.xor(ctrBlock, buf, bufOff);
         gHASHBlock(S, ctrBlock);
@@ -690,7 +726,6 @@ public class GCMBlockCipher
 
     private void processPartial(byte[] buf, int off, int len, byte[] out, int outOff)
     {
-        byte[] ctrBlock = new byte[BLOCK_SIZE];
         getNextCTRBlock(ctrBlock);
 
         if (forEncryption)

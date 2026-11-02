@@ -26,6 +26,7 @@ public final class CryptoServicesRegistrar
 
     private static final Object cacheLock = new Object();
     private static SecureRandomProvider defaultSecureRandomProvider;
+    private static volatile boolean secureRandomSpecified;
 
     private static final CryptoServicesConstraints noConstraintsImpl = new CryptoServicesConstraints()
     {
@@ -174,9 +175,11 @@ public final class CryptoServicesRegistrar
             if (secureRandom == null)
             {
                 defaultSecureRandomProvider = null;
+                secureRandomSpecified = false;
             }
             else
             {
+                secureRandomSpecified = true;
                 defaultSecureRandomProvider = new SecureRandomProvider()
                 {
                     public SecureRandom get()
@@ -196,6 +199,19 @@ public final class CryptoServicesRegistrar
     public static void setSecureRandomProvider(SecureRandomProvider secureRandomProvider)
     {
         defaultSecureRandomProvider = secureRandomProvider;
+        secureRandomSpecified = (secureRandomProvider != null);
+    }
+
+    /**
+     * Return true if a default source of randomness has been set with {@link #setSecureRandom(SecureRandom)}
+     * or {@link #setSecureRandomProvider(SecureRandomProvider)}, false if {@link #getSecureRandom()} would
+     * return the library's own default.
+     *
+     * @return true if a default SecureRandom has been specified, false otherwise.
+     */
+    public static boolean isSecureRandomSpecified()
+    {
+        return secureRandomSpecified;
     }
 
     /**
@@ -216,6 +232,11 @@ public final class CryptoServicesRegistrar
      */
     public static void checkConstraints(CryptoServiceProperties cryptoService)
     {
+        if (cryptoService.getPurpose() == CryptoServicePurpose.INTERNAL)
+        {
+            return;
+        }
+
         servicesConstraints.check(cryptoService);
     }
 
@@ -399,8 +420,13 @@ public final class CryptoServicesRegistrar
             throw new IllegalArgumentException("Bad property value passed");
         }
 
-        // set the property for the current thread as well to avoid mass confusion
-        localSetThread(property, propertyValue);
+        // update the current thread's value as well, if it has one, to avoid mass confusion
+        Map properties = (Map)threadProperties.get(Thread.currentThread());
+
+        if (properties != null && properties.containsKey(property.name))
+        {
+            properties.put(property.name, propertyValue);
+        }
 
         globalProperties.put(property.name, propertyValue);
     }
@@ -438,11 +464,18 @@ public final class CryptoServicesRegistrar
 
         if (properties == null)
         {
-            properties = new HashMap();
-            threadProperties.put(Thread.currentThread(), properties);
+            return null;
         }
 
-        return (Object[])properties.remove(property.name);
+        Object[] values = (Object[])properties.remove(property.name);
+
+        // drop an emptied map so the thread is left holding nothing of ours
+        if (properties.isEmpty())
+        {
+            threadProperties.remove(Thread.currentThread());
+        }
+
+        return values;
     }
 
     private static DHParameters toDH(DSAParameters dsaParams)

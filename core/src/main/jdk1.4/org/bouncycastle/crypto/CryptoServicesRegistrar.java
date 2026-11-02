@@ -11,6 +11,7 @@ import java.util.Map;
 import java.util.logging.Logger;
 
 import org.bouncycastle.asn1.x9.X9ECParameters;
+import org.bouncycastle.crypto.constraints.QuantumVulnerableConstraint;
 import org.bouncycastle.crypto.params.DHParameters;
 import org.bouncycastle.crypto.params.DHValidationParameters;
 import org.bouncycastle.crypto.params.DSAParameters;
@@ -36,6 +37,7 @@ public final class CryptoServicesRegistrar
 
     private static final Object cacheLock = new Object();
     private static SecureRandomProvider defaultSecureRandomProvider;
+    private static volatile boolean secureRandomSpecified;
 
     private static final CryptoServicesConstraints noConstraintsImpl = new CryptoServicesConstraints()
     {
@@ -47,9 +49,25 @@ public final class CryptoServicesRegistrar
 
     private static CryptoServicesConstraints getDefaultConstraints()
     {
-        // TODO: return one based on system/security properties if set.
+        String policy = Properties.getPropertyValue(Properties.CONSTRAINTS_QUANTUM_VULNERABLE);
+        if (policy == null)
+        {
+            return noConstraintsImpl;
+        }
 
-        return noConstraintsImpl;
+        CryptoServicesConstraints constraints;
+        try
+        {
+            constraints = QuantumVulnerableConstraint.forPolicy(policy);
+        }
+        catch (IllegalArgumentException e)
+        {
+            // a failure here would leave the whole class unusable, so report it and carry on unconstrained
+            LOG.warning("ignoring " + Properties.CONSTRAINTS_QUANTUM_VULNERABLE + ": " + e.getMessage());
+            return noConstraintsImpl;
+        }
+
+        return (constraints == null) ? noConstraintsImpl : constraints;
     }
 
     private static final boolean preconfiguredConstraints;
@@ -186,9 +204,11 @@ public final class CryptoServicesRegistrar
             if (secureRandom == null)
             {
                 defaultSecureRandomProvider = null;
+                secureRandomSpecified = false;
             }
             else
             {
+                secureRandomSpecified = true;
                 defaultSecureRandomProvider = new SecureRandomProvider()
                 {
                     public SecureRandom get()
@@ -210,6 +230,19 @@ public final class CryptoServicesRegistrar
         checkPermission(CanSetDefaultRandom);
 
         defaultSecureRandomProvider = secureRandomProvider;
+        secureRandomSpecified = (secureRandomProvider != null);
+    }
+
+    /**
+     * Return true if a default source of randomness has been set with {@link #setSecureRandom(SecureRandom)}
+     * or {@link #setSecureRandomProvider(SecureRandomProvider)}, false if {@link #getSecureRandom()} would
+     * return the library's own default.
+     *
+     * @return true if a default SecureRandom has been specified, false otherwise.
+     */
+    public static boolean isSecureRandomSpecified()
+    {
+        return secureRandomSpecified;
     }
 
     /**
@@ -230,6 +263,11 @@ public final class CryptoServicesRegistrar
      */
     public static void checkConstraints(CryptoServiceProperties cryptoService)
     {
+        if (cryptoService.getPurpose() == CryptoServicePurpose.INTERNAL)
+        {
+            return;
+        }
+
         servicesConstraints.check(cryptoService);
     }
 
@@ -244,7 +282,7 @@ public final class CryptoServicesRegistrar
 
         if (preconfiguredConstraints)
         {
-            if (Properties.isOverrideSet("org.bouncycastle.constraints.allow_override"))
+            if (Properties.isOverrideSet(Properties.CONSTRAINTS_ALLOW_OVERRIDE))
             {
                 servicesConstraints = newConstraints;
             }
@@ -419,8 +457,13 @@ public final class CryptoServicesRegistrar
             throw new IllegalArgumentException("Bad property value passed");
         }
 
-        // set the property for the current thread as well to avoid mass confusion
-        localSetThread(property, propertyValue);
+        // update the current thread's value as well, if it has one, to avoid mass confusion
+        Map<String, Object[]> properties = (Map<String, Object[]>)threadProperties.get();
+
+        if (properties != null && properties.containsKey(property.name))
+        {
+            properties.put(property.name, propertyValue);
+        }
 
         globalProperties.put(property.name, propertyValue);
     }
@@ -462,11 +505,18 @@ public final class CryptoServicesRegistrar
 
         if (properties == null)
         {
-            properties = new HashMap<String, Object[]>();
-            threadProperties.set(properties);
+            return null;
         }
 
-        return (Object[])properties.remove(property.name);
+        Object[] values = (Object[])properties.remove(property.name);
+
+        // drop an emptied map so the thread is left holding nothing of ours
+        if (properties.isEmpty())
+        {
+            threadProperties.set(null);
+        }
+
+        return values;
     }
 
     private static void checkPermission(final Permission permission)

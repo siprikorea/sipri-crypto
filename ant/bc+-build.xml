@@ -773,6 +773,10 @@
              <fileset dir="${src.dir}">
                  <exclude name="**/*Test.java" />
                  <exclude name="**/*Tests.java" />
+                 <!-- test helpers that live in the org.bouncycastle.tls package to reach package-private
+                      members (the DTLS 1.3 *TestSupport classes); they reference excluded *Test classes
+                      and must not be swept into the provider jar -->
+                 <exclude name="**/*TestSupport.java" />
                  <exclude name="**/test/*.java" />
                  <exclude name="**/test/**" />
                  <include name="org/bouncycastle/tls/**/*.java" />
@@ -1017,9 +1021,14 @@
              <fileset dir="${src.dir}" includes="**/crypto/*/*Test.java" />
              <fileset dir="${src.dir}" includes="**/crypto/agreement/owl/*Test.java" />
              <fileset dir="${src.dir}" includes="org/bouncycastle/tls/SpreadCertificateStatusTest.java" />
+             <!-- package-level helper the tls.test DTLS 1.3 tests need (reaches package-private members);
+                  the bctls copy excludes every *TestSupport.java, so it has to come from here -->
+             <fileset dir="${src.dir}" includes="org/bouncycastle/tls/DTLS13KeyUpdateTestSupport.java" />
+             <fileset dir="${src.dir}" includes="org/bouncycastle/cert/dane/fetcher/JndiDANEFetcherFactoryTest.java" />
              <!-- main-namespace test fixture the bcpg copy now excludes; the openpgp.api tests resolve it from here -->
              <fileset dir="${src.dir}" includes="org/bouncycastle/openpgp/OpenPGPTestKeys.java" />
              <fileset dir="${src.dir}" includes="**/pqc/crypto/hqc/*Test.java" />
+             <fileset dir="${src.dir}" includes="**/pqc/crypto/ntruprime/*Test.java" />
              <fileset dir="${src.dir}" includes="**/pqc/math/ntru/*Test.java" />
              <fileset dir="${src.dir}" includes="**/tsp/*UnitTest.java" />
              <fileset dir="${src.dir}" includes="**/utiltest/*Test.java" />
@@ -1057,7 +1066,6 @@
              <fileset dir="${src.dir}" includes="**/*.message" />
         </copy>
 
-        <delete file="${test.target.src.dir}/org/bouncycastle/pqc/crypto/lms/AllTests.java" />
         <delete file="${test.target.src.dir}/org/bouncycastle/crypto/params/AllTests.java" />
         <delete file="${test.target.src.dir}/org/bouncycastle/crypto/signers/lms/AllTests.java" />
         <delete file="${test.target.src.dir}/org/bouncycastle/crypto/signers/xmss/AllTests.java" />
@@ -1104,7 +1112,7 @@
                 </fileset>
             </classpath>
             <sysproperty key="test.java.version.prefix" value="${env.JAVA_VERSION_PREFIX}" />
-            <!-- the PKCS#12 keystore writes with a 600,000 iteration PBE by default and BCFKS
+            <!-- the PKCS#12 keystore writes with a 300,000 iteration PBE by default and BCFKS
                  with a 51,200 iteration PBKDF2, several seconds per store; the tests are not
                  measuring the KDF, so write cheap files -->
             <sysproperty key="org.bouncycastle.pkcs12.store_it_count" value="4096" />
@@ -1138,7 +1146,7 @@
                 </fileset>
             </classpath>
 
-            <!-- the PKCS#12 keystore writes with a 600,000 iteration PBE by default and BCFKS
+            <!-- the PKCS#12 keystore writes with a 300,000 iteration PBE by default and BCFKS
                  with a 51,200 iteration PBKDF2, several seconds per store; the tests are not
                  measuring the KDF, so write cheap files -->
             <sysproperty key="org.bouncycastle.pkcs12.store_it_count" value="4096" />

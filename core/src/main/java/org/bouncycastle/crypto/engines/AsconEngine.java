@@ -17,7 +17,7 @@ import org.bouncycastle.util.Pack;
  * </a>.
  * </p>
  *
- * @deprecated Now superseded. Please refer to {@code AsconAEAD128Engine} for future implementations.
+ * @deprecated Now superseded. Please refer to {@link AsconAEAD128} (the SP 800-232 version) for future implementations.
  */
 
 public class AsconEngine
@@ -191,8 +191,8 @@ public class AsconEngine
             p.x3 ^= K2;
             break;
         case ascon80pq:
-            p.x1 ^= (K0 << 32 | K1 >> 32);
-            p.x2 ^= (K1 << 32 | K2 >> 32);
+            p.x1 ^= (K0 << 32 | K1 >>> 32);
+            p.x2 ^= (K1 << 32 | K2 >>> 32);
             p.x3 ^= K2 << 32;
             break;
         default:
@@ -217,7 +217,7 @@ public class AsconEngine
         }
         else if (KEY_SIZE == 20)
         {
-            K0 = Pack.bigEndianToInt(key, 0);
+            K0 = Pack.bigEndianToInt(key, 0) & 0xffffffffL;
             K1 = Pack.bigEndianToLong(key, 4);
             K2 = Pack.bigEndianToLong(key, 12);
         }

@@ -6,6 +6,7 @@ import org.bouncycastle.asn1.ASN1Primitive;
 import org.bouncycastle.asn1.ASN1Sequence;
 import org.bouncycastle.asn1.ASN1Set;
 import org.bouncycastle.asn1.ASN1TaggedObject;
+import org.bouncycastle.asn1.BERTags;
 import org.bouncycastle.asn1.DERSequence;
 import org.bouncycastle.asn1.DERTaggedObject;
 
@@ -61,7 +62,7 @@ public class OriginatorInfo
         case 0:     // empty
             break;
         case 1:
-            ASN1TaggedObject o = (ASN1TaggedObject)seq.getObjectAt(0);
+            ASN1TaggedObject o = ASN1TaggedObject.getInstance(seq.getObjectAt(0), BERTags.CONTEXT_SPECIFIC);
             switch (o.getTagNo())
             {
             case 0 :
@@ -71,12 +72,12 @@ public class OriginatorInfo
                 crls = ASN1Set.getInstance(o, false);
                 break;
             default:
-                throw new IllegalArgumentException("Bad tag in OriginatorInfo: " + o.getTagNo());
+                throw new IllegalArgumentException("unknown tag: " + o.getTagNo());
             }
             break;
         case 2:
-            certs = ASN1Set.getInstance((ASN1TaggedObject)seq.getObjectAt(0), false);
-            crls  = ASN1Set.getInstance((ASN1TaggedObject)seq.getObjectAt(1), false);
+            certs = ASN1Set.getInstance(ASN1TaggedObject.getInstance(seq.getObjectAt(0), BERTags.CONTEXT_SPECIFIC, 0), false);
+            crls  = ASN1Set.getInstance(ASN1TaggedObject.getInstance(seq.getObjectAt(1), BERTags.CONTEXT_SPECIFIC, 1), false);
             break;
         default:
             throw new IllegalArgumentException("OriginatorInfo too big");
@@ -89,7 +90,7 @@ public class OriginatorInfo
      * @param obj the tagged object holding the object we want.
      * @param explicit true if the object is meant to be explicitly
      *              tagged false otherwise.
-     * @exception IllegalArgumentException if the object held by the
+     * @throws IllegalArgumentException if the object held by the
      *          tagged object cannot be converted.
      */
     public static OriginatorInfo getInstance(
@@ -110,7 +111,7 @@ public class OriginatorInfo
      * </ul>
      *
      * @param obj the object we want converted.
-     * @exception IllegalArgumentException if the object cannot be converted.
+     * @throws IllegalArgumentException if the object cannot be converted.
      */
     public static OriginatorInfo getInstance(
         Object obj)

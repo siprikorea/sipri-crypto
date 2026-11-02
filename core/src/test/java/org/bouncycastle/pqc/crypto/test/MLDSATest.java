@@ -15,17 +15,24 @@ import java.util.regex.Pattern;
 import junit.framework.TestCase;
 import org.bouncycastle.asn1.ASN1Encodable;
 import org.bouncycastle.asn1.DEROctetString;
+import org.bouncycastle.asn1.nist.NISTObjectIdentifiers;
+import org.bouncycastle.asn1.x509.AlgorithmIdentifier;
+import org.bouncycastle.asn1.DERTaggedObject;
+import org.bouncycastle.asn1.ASN1Integer;
 import org.bouncycastle.asn1.DERSequence;
 import org.bouncycastle.asn1.pkcs.PrivateKeyInfo;
 import org.bouncycastle.asn1.x509.SubjectPublicKeyInfo;
 import org.bouncycastle.crypto.AsymmetricCipherKeyPair;
+import org.bouncycastle.crypto.CipherParameters;
 import org.bouncycastle.crypto.CryptoException;
+import org.bouncycastle.crypto.DataLengthException;
 import org.bouncycastle.crypto.Signer;
 import org.bouncycastle.crypto.generators.MLDSAKeyPairGenerator;
 import org.bouncycastle.crypto.params.MLDSAKeyGenerationParameters;
 import org.bouncycastle.crypto.params.MLDSAParameters;
 import org.bouncycastle.crypto.params.MLDSAPrivateKeyParameters;
 import org.bouncycastle.crypto.params.MLDSAPublicKeyParameters;
+import org.bouncycastle.crypto.params.ParametersWithContext;
 import org.bouncycastle.crypto.params.ParametersWithRandom;
 import org.bouncycastle.crypto.signers.HashMLDSASigner;
 import org.bouncycastle.crypto.signers.MLDSASigner;
@@ -710,6 +717,60 @@ public class MLDSATest
         }
     }
 
+    public void testCalculateMuVerify()
+        throws Exception
+    {
+        MLDSAKeyPairGenerator kpGen = new MLDSAKeyPairGenerator();
+        kpGen.init(new MLDSAKeyGenerationParameters(new SecureRandom(), MLDSAParameters.ml_dsa_65));
+        AsymmetricCipherKeyPair kp = kpGen.generateKeyPair();
+
+        byte[][] messages = { new byte[0], Strings.toByteArray("Hello World!") };
+        byte[][] contexts = { null, Strings.toByteArray("context") };
+
+        for (int c = 0; c != contexts.length; c++)
+        {
+            for (int m = 0; m != messages.length; m++)
+            {
+                byte[] message = messages[m];
+                CipherParameters priv = contexts[c] == null ? (CipherParameters)kp.getPrivate() : new ParametersWithContext(kp.getPrivate(), contexts[c]);
+                CipherParameters pub = contexts[c] == null ? (CipherParameters)kp.getPublic() : new ParametersWithContext(kp.getPublic(), contexts[c]);
+
+                MLDSASigner signer = new MLDSASigner();
+                signer.init(true, priv);
+                signer.update(message, 0, message.length);
+                byte[] mu = signer.generateMu();
+                signer.update(message, 0, message.length);
+                byte[] signature = signer.generateSignature();
+
+                MLDSASigner verifier = new MLDSASigner();
+                verifier.init(false, pub);
+                verifier.update(message, 0, message.length);
+                assertTrue("mu rejected, message length " + message.length, verifier.verifyMu(mu));
+
+                byte[] flipped = Arrays.clone(mu);
+                flipped[0] ^= 1;
+                verifier.update(message, 0, message.length);
+                assertFalse(verifier.verifyMu(flipped));
+
+                // checking a mu must leave the verifier able to check an ordinary signature
+                verifier.update(message, 0, message.length);
+                assertTrue(verifier.verifySignature(signature));
+
+                try
+                {
+                    verifier.verifyMu(new byte[3]);
+                    fail("short mu accepted");
+                }
+                catch (DataLengthException e)
+                {
+                    assertEquals("mu value must be 64 bytes", e.getMessage());
+                }
+                verifier.update(message, 0, message.length);
+                assertTrue(verifier.verifyMu(mu));
+            }
+        }
+    }
+
     public void testMLDSARejection()
         throws Exception
     {
@@ -743,9 +804,10 @@ public class MLDSATest
         {
             int expandedKeyLength = expandedKeyLengths[i];
 
-            // valid lengths still construct: 32 byte seed and exact expanded key
-            new MLDSAPrivateKeyParameters(paramSets[i], new byte[32]);
-            new MLDSAPrivateKeyParameters(paramSets[i], new byte[expandedKeyLength]);
+            // valid lengths still construct: 32 byte seed and exact expanded key (a real one, as tr must match rho and t1)
+            MLDSAPrivateKeyParameters seedKey = new MLDSAPrivateKeyParameters(paramSets[i], new byte[32]);
+            assertEquals(expandedKeyLength, seedKey.getEncoded().length);
+            new MLDSAPrivateKeyParameters(paramSets[i], seedKey.getEncoded());
 
             int[] badLengths = new int[]{
                 0, 31, 33, expandedKeyLength - 1, expandedKeyLength + 1, 32 + expandedKeyLength };
@@ -841,6 +903,239 @@ public class MLDSATest
             {
                 // expected
             }
+        }
+    }
+
+    public void testPrivateKeyEmbeddedPublicKeyConsistency()
+        throws Exception
+    {
+        // an ML-DSA OneAsymmetricKey may carry the public key (RFC 9881 sec. 6), and both its rho and its t1 must match the private key
+        int[] formats = new int[]{ MLDSAPrivateKeyParameters.BOTH, MLDSAPrivateKeyParameters.SEED_ONLY,
+            MLDSAPrivateKeyParameters.EXPANDED_KEY };
+
+        for (int i = 0; i != PARAMETER_SETS.length; i++)
+        {
+            MLDSAParameters parameters = PARAMETER_SETS[i];
+            MLDSAKeyPairGenerator kpGen = new MLDSAKeyPairGenerator();
+            kpGen.init(new MLDSAKeyGenerationParameters(new SecureRandom(), parameters));
+            AsymmetricCipherKeyPair kp = kpGen.generateKeyPair();
+            MLDSAPrivateKeyParameters priv = (MLDSAPrivateKeyParameters)kp.getPrivate();
+            byte[] pub = ((MLDSAPublicKeyParameters)kp.getPublic()).getEncoded();
+
+            byte[] rhoFlip = Arrays.clone(pub);
+            rhoFlip[5] ^= 0x01;
+            byte[] t1Flip = Arrays.clone(pub);
+            t1Flip[t1Flip.length - 1] ^= 0x01;
+
+            for (int j = 0; j != formats.length; j++)
+            {
+                PrivateKeyInfo info = PrivateKeyInfoFactory.createPrivateKeyInfo(priv.withPreferredFormat(formats[j]));
+
+                MLDSAPrivateKeyParameters key = (MLDSAPrivateKeyParameters)PrivateKeyFactory.createKey(withPublicKey(info, pub));
+                assertTrue(Arrays.areEqual(pub, key.getPublicKey()));
+
+                checkPublicKeyMismatch(withPublicKey(info, t1Flip), parameters.getName() + " t1");
+                checkPublicKeyMismatch(withPublicKey(info, rhoFlip), parameters.getName() + " rho");
+            }
+
+            // the constructor directly, given the expanded key and given the seed
+            byte[][] encodings = new byte[][]{ priv.getEncoded(), priv.getSeed() };
+            for (int j = 0; j != encodings.length; j++)
+            {
+                new MLDSAPrivateKeyParameters(parameters, encodings[j], new MLDSAPublicKeyParameters(parameters, pub));
+                try
+                {
+                    new MLDSAPrivateKeyParameters(parameters, encodings[j], new MLDSAPublicKeyParameters(parameters, rhoFlip));
+                    fail("no exception for " + parameters.getName() + " public key with a different rho");
+                }
+                catch (IllegalArgumentException e)
+                {
+                    assertEquals("passed in public key does not match private values", e.getMessage());
+                }
+            }
+        }
+    }
+
+    /**
+     * RFC 9881 sec. 6: the privateKey is CHOICE { seed [0] OCTET STRING (SIZE (32)), expandedKey OCTET STRING,
+     * both SEQUENCE { seed, expandedKey } } and the tag says which arm is present. Each arm must have its
+     * exact length, while the three pre-RFC forms of earlier drafts (the raw seed, the raw expanded key and the
+     * seed in an untagged OCTET STRING) are still read.
+     */
+    public void testPrivateKeyInfoChoiceArms()
+        throws Exception
+    {
+        for (int i = 0; i != PARAMETER_SETS.length; i++)
+        {
+            MLDSAParameters parameters = PARAMETER_SETS[i];
+            MLDSAKeyPairGenerator kpGen = new MLDSAKeyPairGenerator();
+            kpGen.init(new MLDSAKeyGenerationParameters(new SecureRandom(), parameters));
+            MLDSAPrivateKeyParameters priv = (MLDSAPrivateKeyParameters)kpGen.generateKeyPair().getPrivate();
+            byte[] seed = priv.getSeed();
+            byte[] expanded = priv.getEncoded();
+            AlgorithmIdentifier algId = PrivateKeyInfoFactory.createPrivateKeyInfo(priv).getPrivateKeyAlgorithm();
+            String name = parameters.getName();
+
+            // the RFC forms
+            checkChoiceAccepted(name + " seed", algId, new DERTaggedObject(false, 0, new DEROctetString(seed)), expanded);
+            checkChoiceAccepted(name + " expandedKey", algId, new DEROctetString(expanded), expanded);
+            checkChoiceAccepted(name + " both", algId, new DERSequence(new ASN1Encodable[]{ new DEROctetString(seed), new DEROctetString(expanded) }), expanded);
+
+            // the pre-RFC forms
+            checkRawAccepted(name + " raw seed", algId, seed, expanded);
+            checkRawAccepted(name + " raw expandedKey", algId, expanded, expanded);
+            checkChoiceAccepted(name + " untagged seed", algId, new DEROctetString(seed), expanded);
+
+            // the seed arm must be exactly 32 bytes
+            checkChoiceRejected(name + " tagged expandedKey", algId, new DERTaggedObject(false, 0, new DEROctetString(expanded)), "seed must be 32 bytes");
+            checkChoiceRejected(name + " short tagged seed", algId, new DERTaggedObject(false, 0, new DEROctetString(Arrays.copyOf(seed, 31))), "seed must be 32 bytes");
+            checkChoiceRejected(name + " long tagged seed", algId, new DERTaggedObject(false, 0, new DEROctetString(Arrays.copyOf(seed, 33))), "seed must be 32 bytes");
+            checkChoiceRejected(name + " tag [1]", algId, new DERTaggedObject(false, 1, new DEROctetString(seed)), "unexpected tag");
+
+            // the expandedKey arm must be exactly the expanded key length
+            checkChoiceRejected(name + " short expandedKey", algId, new DEROctetString(Arrays.copyOf(expanded, expanded.length - 1)), "invalid length");
+            checkChoiceRejected(name + " long expandedKey", algId, new DEROctetString(Arrays.copyOf(expanded, expanded.length + 1)), "invalid length");
+            checkChoiceRejected(name + " 31 byte OCTET STRING", algId, new DEROctetString(Arrays.copyOf(seed, 31)), "invalid length");
+            checkRawRejected(name + " raw 33 bytes", algId, Arrays.copyOf(seed, 33), "invalid length");
+
+            // both: exactly two elements, a 32 byte seed and an expandedKey of the right length that matches it
+            checkChoiceRejected(name + " both with expandedKey as seed", algId, new DERSequence(new ASN1Encodable[]{ new DEROctetString(expanded), new DEROctetString(expanded) }), "seed must be 32 bytes");
+            checkChoiceRejected(name + " both with seed as expandedKey", algId, new DERSequence(new ASN1Encodable[]{ new DEROctetString(seed), new DEROctetString(seed) }), "expandedKey must be " + expanded.length + " bytes");
+            checkChoiceRejected(name + " both with one element", algId, new DERSequence(new ASN1Encodable[]{ new DEROctetString(seed) }), "both must have 2 elements");
+            byte[] flipped = Arrays.clone(expanded);
+            flipped[expanded.length - 1] ^= 1;
+            checkChoiceRejected(name + " both inconsistent", algId, new DERSequence(new ASN1Encodable[]{ new DEROctetString(seed), new DEROctetString(flipped) }), "inconsistent");
+        }
+    }
+
+    private static void checkChoiceAccepted(String label, AlgorithmIdentifier algId, ASN1Encodable privateKey, byte[] expanded)
+        throws Exception
+    {
+        MLDSAPrivateKeyParameters key = (MLDSAPrivateKeyParameters)PrivateKeyFactory.createKey(new PrivateKeyInfo(algId, privateKey));
+        assertTrue(label, Arrays.areEqual(expanded, key.getEncoded()));
+    }
+
+    private static void checkRawAccepted(String label, AlgorithmIdentifier algId, byte[] content, byte[] expanded)
+        throws Exception
+    {
+        MLDSAPrivateKeyParameters key = (MLDSAPrivateKeyParameters)PrivateKeyFactory.createKey(rawPrivateKeyInfo(algId, content));
+        assertTrue(label, Arrays.areEqual(expanded, key.getEncoded()));
+    }
+
+    private static void checkChoiceRejected(String label, AlgorithmIdentifier algId, ASN1Encodable privateKey, String message)
+        throws Exception
+    {
+        checkRejected(label, new PrivateKeyInfo(algId, privateKey), message);
+    }
+
+    private static void checkRawRejected(String label, AlgorithmIdentifier algId, byte[] content, String message)
+        throws Exception
+    {
+        checkRejected(label, rawPrivateKeyInfo(algId, content), message);
+    }
+
+    private static void checkRejected(String label, PrivateKeyInfo info, String message)
+        throws Exception
+    {
+        try
+        {
+            PrivateKeyFactory.createKey(info);
+            fail(label + ": accepted");
+        }
+        catch (IllegalArgumentException e)
+        {
+            assertTrue(label + ": " + e.getMessage(), e.getMessage().indexOf(message) >= 0);
+        }
+    }
+
+    // a PrivateKeyInfo whose privateKey OCTET STRING holds the given bytes as its content, not as a DER value
+    private static PrivateKeyInfo rawPrivateKeyInfo(AlgorithmIdentifier algId, byte[] content)
+    {
+        return PrivateKeyInfo.getInstance(new DERSequence(new ASN1Encodable[]{ new ASN1Integer(0), algId, new DEROctetString(content) }));
+    }
+
+    public void testExpandedPrivateKeyTrConsistency()
+        throws Exception
+    {
+        // tr is H(pk) (FIPS 204 Algorithm 6), so an expanded key whose tr does not match its rho and t1 must be refused
+        for (int i = 0; i != PARAMETER_SETS.length; i++)
+        {
+            MLDSAParameters parameters = PARAMETER_SETS[i];
+            MLDSAKeyPairGenerator kpGen = new MLDSAKeyPairGenerator();
+            kpGen.init(new MLDSAKeyGenerationParameters(new SecureRandom(), parameters));
+            AsymmetricCipherKeyPair kp = kpGen.generateKeyPair();
+            MLDSAPrivateKeyParameters priv = (MLDSAPrivateKeyParameters)kp.getPrivate();
+            byte[] expanded = priv.getEncoded();
+
+            MLDSAPrivateKeyParameters key = new MLDSAPrivateKeyParameters(parameters, expanded, null);
+            assertTrue(Arrays.areEqual(priv.getTr(), key.getTr()));
+            assertTrue(Arrays.areEqual(((MLDSAPublicKeyParameters)kp.getPublic()).getEncoded(), key.getPublicKey()));
+
+            // rho (32) || K (32) || tr (64) || ...
+            int[] trOffsets = new int[]{ 64, 64 + 63 };
+            for (int j = 0; j != trOffsets.length; j++)
+            {
+                byte[] trFlip = Arrays.clone(expanded);
+                trFlip[trOffsets[j]] ^= 0x01;
+
+                try
+                {
+                    new MLDSAPrivateKeyParameters(parameters, trFlip, null);
+                    fail("no exception for " + parameters.getName() + " expanded key with a different tr");
+                }
+                catch (IllegalArgumentException e)
+                {
+                    assertEquals("'encoding' has inconsistent tr", e.getMessage());
+                }
+
+                PrivateKeyInfo info = PrivateKeyInfoFactory.createPrivateKeyInfo(
+                    new MLDSAPrivateKeyParameters(parameters, expanded, null).withPreferredFormat(MLDSAPrivateKeyParameters.EXPANDED_KEY));
+                byte[] infoEnc = info.getEncoded();
+                int pos = indexOf(infoEnc, expanded);
+                assertTrue(pos > 0);
+                infoEnc[pos + trOffsets[j]] ^= 0x01;
+                try
+                {
+                    PrivateKeyFactory.createKey(PrivateKeyInfo.getInstance(infoEnc));
+                    fail("no exception for " + parameters.getName() + " PKCS#8 expanded key with a different tr");
+                }
+                catch (IllegalArgumentException e)
+                {
+                    assertEquals("'encoding' has inconsistent tr", e.getMessage());
+                }
+            }
+        }
+    }
+
+    private static int indexOf(byte[] data, byte[] target)
+    {
+        for (int i = 0; i <= data.length - target.length; i++)
+        {
+            if (Arrays.areEqual(data, i, i + target.length, target, 0, target.length))
+            {
+                return i;
+            }
+        }
+        return -1;
+    }
+
+    private static PrivateKeyInfo withPublicKey(PrivateKeyInfo info, byte[] publicKey)
+        throws IOException
+    {
+        return new PrivateKeyInfo(info.getPrivateKeyAlgorithm(), info.parsePrivateKey(), null, publicKey);
+    }
+
+    private static void checkPublicKeyMismatch(PrivateKeyInfo info, String label)
+        throws IOException
+    {
+        try
+        {
+            PrivateKeyFactory.createKey(info);
+            fail("no exception for mismatched " + label);
+        }
+        catch (IllegalArgumentException e)
+        {
+            assertEquals("passed in public key does not match private values", e.getMessage());
         }
     }
 

@@ -68,6 +68,11 @@ public class MetaData
         {
             this.otherMetaData = Attributes.getInstance(seq.getObjectAt(index++));
         }
+
+        if (index != seq.size())
+        {
+            throw new IllegalArgumentException("unexpected element at position " + index);
+        }
     }
 
     /**
@@ -81,7 +86,7 @@ public class MetaData
      * </ul>
      *
      * @param obj the object we want converted.
-     * @exception IllegalArgumentException if the object cannot be converted.
+     * @throws IllegalArgumentException if the object cannot be converted.
      */
     public static MetaData getInstance(Object obj)
     {

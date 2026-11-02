@@ -7,6 +7,7 @@ import org.bouncycastle.asn1.ASN1OctetString;
 import org.bouncycastle.asn1.ASN1Primitive;
 import org.bouncycastle.asn1.ASN1Sequence;
 import org.bouncycastle.asn1.ASN1TaggedObject;
+import org.bouncycastle.asn1.BERTags;
 import org.bouncycastle.asn1.DERSequence;
 import org.bouncycastle.asn1.DERTaggedObject;
 import org.bouncycastle.asn1.x509.AlgorithmIdentifier;
@@ -52,22 +53,32 @@ public class KeyAgreeRecipientInfo
     private KeyAgreeRecipientInfo(
         ASN1Sequence seq)
     {
+        if (seq.size() < 4 || seq.size() > 5)
+        {
+            throw new IllegalArgumentException("Bad sequence size: " + seq.size());
+        }
+
         int index = 0;
 
-        version = (ASN1Integer)seq.getObjectAt(index++);
+        version = ASN1Integer.getInstance(seq.getObjectAt(index++));
         originator = OriginatorIdentifierOrKey.getInstance(
-                            (ASN1TaggedObject)seq.getObjectAt(index++), true);
+                            ASN1TaggedObject.getInstance(seq.getObjectAt(index++), BERTags.CONTEXT_SPECIFIC, 0), true);
 
         if (seq.getObjectAt(index) instanceof ASN1TaggedObject)
         {
             ukm = ASN1OctetString.getInstance(
-                            (ASN1TaggedObject)seq.getObjectAt(index++), true);
+                            ASN1TaggedObject.getInstance(seq.getObjectAt(index++), BERTags.CONTEXT_SPECIFIC, 1), true);
         }
 
         keyEncryptionAlgorithm = AlgorithmIdentifier.getInstance(
                                                 seq.getObjectAt(index++));
 
-        recipientEncryptedKeys = (ASN1Sequence)seq.getObjectAt(index++);
+        recipientEncryptedKeys = ASN1Sequence.getInstance(seq.getObjectAt(index++));
+
+        if (index != seq.size())
+        {
+            throw new IllegalArgumentException("unexpected element at position " + index);
+        }
     }
 
     /**
@@ -76,7 +87,7 @@ public class KeyAgreeRecipientInfo
      * @param obj the tagged object holding the object we want.
      * @param explicit true if the object is meant to be explicitly
      *              tagged false otherwise.
-     * @exception IllegalArgumentException if the object held by the
+     * @throws IllegalArgumentException if the object held by the
      *          tagged object cannot be converted.
      */
     public static KeyAgreeRecipientInfo getInstance(
@@ -97,7 +108,7 @@ public class KeyAgreeRecipientInfo
      * </ul>
      *
      * @param obj the object we want converted.
-     * @exception IllegalArgumentException if the object cannot be converted.
+     * @throws IllegalArgumentException if the object cannot be converted.
      */
     public static KeyAgreeRecipientInfo getInstance(
         Object obj)

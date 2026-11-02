@@ -1,6 +1,9 @@
 package org.bouncycastle.pqc.crypto.hqc;
 
+import org.bouncycastle.crypto.CryptoServicePurpose;
+import org.bouncycastle.crypto.CryptoServicesRegistrar;
 import org.bouncycastle.crypto.EncapsulatedSecretExtractor;
+import org.bouncycastle.crypto.constraints.DefaultServiceProperties;
 import org.bouncycastle.util.Arrays;
 
 public class HQCKEMExtractor
@@ -16,6 +19,9 @@ public class HQCKEMExtractor
             throw new NullPointerException("'privateKey' cannot be null");
         }
 
+        CryptoServicesRegistrar.checkConstraints(new DefaultServiceProperties("HQC",
+            privateKey.getParameters().getClassicalSecurityStrength(), privateKey, CryptoServicePurpose.DECRYPTION));
+
         this.privateKey = privateKey;
         this.engine = privateKey.getParameters().getEngine();
     }
@@ -27,9 +33,8 @@ public class HQCKEMExtractor
             throw new IllegalArgumentException("encapsulation wrong length");
         }
         byte[] session_key = new byte[64];
-        byte[] sk = privateKey.getPrivateKey();
 
-        engine.decaps(session_key, encapsulation, sk);
+        engine.decaps(session_key, encapsulation, privateKey.getExpandedKey());
 
         return Arrays.copyOfRange(session_key, 0, 32);
     }

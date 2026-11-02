@@ -4,6 +4,7 @@ import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.OutputStream;
 import java.math.BigInteger;
+import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 
@@ -40,8 +41,10 @@ import org.bouncycastle.util.BigIntegers;
  * recomputes the entry hash from the TBSCertificate, evaluates the inclusion
  * proof against the supplied {@link MerkleTreeHash}, and then either matches
  * the resulting subtree hash against a {@link TrustedSubtree}
- * or counts valid cosignatures against the relying party's
- * {@link MTCCosignerVerifierProvider} until {@code minCosignatures} is met.</p>
+ * or verifies the cosignatures against the relying party's
+ * {@link MTCCosignerVerifierProvider} and checks the cosigners that verified
+ * against the policy: at least {@code minCosignatures} of them, and every
+ * {@link CosignerRequirement} the parameters carry.</p>
  */
 public class MerkleTreeCertificateValidator
 {
@@ -58,17 +61,27 @@ public class MerkleTreeCertificateValidator
      *   <li>The cert's serial number lies within the CA's authorized range
      *       {@code [authorityInfo.getMinSerial(), authorityInfo.getMaxSerial()]}
      *       (Section 5.5 / 7.2).</li>
-     *   <li>The {@code hashFunction} OID matches {@code authorityInfo.getLogHash()}
-     *       (Section 7.1).</li>
      * </ul>
+     * <p>The log hash function is not part of the structure: a relying party
+     * configured from a CA certificate takes it from the extension type
+     * ({@link MTCCertificationAuthorityCertificate#logHashAlgorithm}, Section 7.1)
+     * and is responsible for supplying a matching {@code hashFunction} here.</p>
      * <p>{@code authorityInfo.getSigAlg()} is the CA cosigner's published signature
      * algorithm. {@link MTCSignatureVerifier#getAlgorithm()} surfaces the MTC
-     * algorithm string a registered verifier is bound to, but the draft does
-     * not pin OID identifiers for the plain (r||s) ECDSA forms, so the
-     * validator does not map {@code sigAlg} to that string itself. Callers
+     * algorithm string a registered verifier is bound to, but the draft fixes
+     * no mapping from signature algorithm identifiers to cosigner algorithms,
+     * so the validator does not map {@code sigAlg} to that string itself. Callers
      * building the provider for the CA cosigner remain responsible for
      * checking the verifier they register against
      * {@code authorityInfo.getSigAlg()}.</p>
+     * <p>The cosigner policy (Section 7.3) has two parts. {@code minCosignatures}
+     * is a floor on the number of registered cosigners whose cosignatures
+     * verify. {@link #requireCosigners(CosignerRequirement)} adds a
+     * {@link CosignerRequirement}, a quorum over named cosigners and the
+     * issuing CA, each of which must also be satisfied; a relying party
+     * following the Section 7.3 guidance requires
+     * {@link CosignerRequirement#issuingCA()} and a quorum of independent
+     * witnesses. Both parts are waived for a certificate in a trusted subtree.</p>
      */
     public static class ValidationParams
     {
@@ -78,6 +91,7 @@ public class MerkleTreeCertificateValidator
         private final int minCosignatures;
         private final MerkleTreeHash hashFunction;
         private final MTCCertificationAuthority authorityInfo;
+        private final List<CosignerRequirement> cosignerRequirements;
 
         public ValidationParams(
             MTCCosignerVerifierProvider cosignerVerifierProvider,
@@ -116,12 +130,46 @@ public class MerkleTreeCertificateValidator
             MerkleTreeHash hashFunction,
             MTCCertificationAuthority authorityInfo)
         {
+            this(cosignerVerifierProvider, trustedSubtrees, revokedRanges, minCosignatures, hashFunction,
+                authorityInfo, Collections.<CosignerRequirement>emptyList());
+        }
+
+        private ValidationParams(
+            MTCCosignerVerifierProvider cosignerVerifierProvider,
+            List<TrustedSubtree> trustedSubtrees,
+            List<RevokedRange> revokedRanges,
+            int minCosignatures,
+            MerkleTreeHash hashFunction,
+            MTCCertificationAuthority authorityInfo,
+            List<CosignerRequirement> cosignerRequirements)
+        {
             this.cosignerVerifierProvider = cosignerVerifierProvider;
             this.trustedSubtrees = trustedSubtrees;
             this.revokedRanges = revokedRanges;
             this.minCosignatures = minCosignatures;
             this.hashFunction = hashFunction;
             this.authorityInfo = authorityInfo;
+            this.cosignerRequirements = cosignerRequirements;
+        }
+
+        /**
+         * Returns a copy of these parameters that additionally requires
+         * {@code requirement} to be satisfied by the cosigners whose
+         * cosignatures verify. Each call adds a requirement; all of them must
+         * hold. The cosigners a requirement names must be registered with the
+         * {@link MTCCosignerVerifierProvider}, since only a verified cosignature
+         * satisfies a requirement.
+         */
+        public ValidationParams requireCosigners(CosignerRequirement requirement)
+        {
+            if (requirement == null)
+            {
+                throw new NullPointerException("requirement");
+            }
+            List<CosignerRequirement> reqs = new ArrayList<CosignerRequirement>(cosignerRequirements);
+            reqs.add(requirement);
+            return new ValidationParams(cosignerVerifierProvider, trustedSubtrees, revokedRanges, minCosignatures,
+                hashFunction, authorityInfo, Collections.unmodifiableList(reqs));
         }
 
         public MTCCosignerVerifierProvider getCosignerVerifierProvider()
@@ -152,6 +200,15 @@ public class MerkleTreeCertificateValidator
         public MTCCertificationAuthority getAuthorityInfo()
         {
             return authorityInfo;
+        }
+
+        /**
+         * The cosigner requirements added with {@link #requireCosigners(CosignerRequirement)},
+         * all of which must be satisfied; empty if none.
+         */
+        public List<CosignerRequirement> getCosignerRequirements()
+        {
+            return cosignerRequirements;
         }
     }
 
@@ -374,20 +431,7 @@ public class MerkleTreeCertificateValidator
             throw new IllegalArgumentException("id-alg-mtcProof must have absent parameters");
         }
 
-        // Cross-check the supplied hash function against the CA's published
-        // logHash (Section 7.1). When authorityInfo is null, the relying
-        // party is trusting itself to have wired the right hash.
         MTCCertificationAuthority authorityInfo = params.authorityInfo;
-        if (authorityInfo != null)
-        {
-            if (!authorityInfo.getLogHash().getAlgorithm().equals(
-                    params.hashFunction.getAlgorithmIdentifier().getAlgorithm()))
-            {
-                throw new SecurityException(
-                    "hash function " + params.hashFunction.getAlgorithmIdentifier().getAlgorithm()
-                    + " does not match CA logHash " + authorityInfo.getLogHash().getAlgorithm());
-            }
-        }
 
         // Step 2: decode the signatureValue as an MTCProof. A BIT STRING with
         // unused bits is not a multiple of 8 bits and fails verification.
@@ -440,7 +484,7 @@ public class MerkleTreeCertificateValidator
 
         // Steps 7-9: derive the entry hash from the TBSCertificate. The
         // MTCProof's extensions list is prepended (per Section 7.2 step 8.2)
-        // so that the leaf hash matches the log's view of the MerkleTreeCertEntry.
+        // so that the leaf hash matches the log's view of the MTCLogEntry.
         byte[] entryHash = computeEntryHash(certHolder, proof.getExtensionsWire(), params.hashFunction);
 
         // Step 10: evaluate the inclusion proof to recover the expected subtree hash.
@@ -492,8 +536,8 @@ public class MerkleTreeCertificateValidator
         byte[] caId = extractCaIdFromIssuer(certHolder.getIssuer());
         byte[] logId = TrustAnchorIDs.logId(caId, logNumber);
 
-        int validCount = 0;
-        for (MTCSignature sig : proof.getSignatures())
+        List<byte[]> verifiedCosigners = new ArrayList<byte[]>();
+        for (MTCCosignature sig : proof.getSignatures())
         {
             byte[] cosignerId = sig.getCosignerId();
             MTCCosignerVerifier verifier = params.cosignerVerifierProvider.get(cosignerId);
@@ -503,7 +547,7 @@ public class MerkleTreeCertificateValidator
                 continue;
             }
 
-            byte[] cosignedMessage = MTCCosignedMessage.encode(
+            byte[] cosignedMessage = MTCCosignedSubtree.encode(
                 logId, proof.getStart(), proof.getEnd(), expectedSubtreeHash, cosignerId);
 
             OutputStream sOut = verifier.getOutputStream();
@@ -511,14 +555,23 @@ public class MerkleTreeCertificateValidator
             sOut.close();
             if (verifier.verify(sig.getSignature()))
             {
-                validCount++;
+                verifiedCosigners.add(cosignerId);
             }
         }
 
-        if (validCount < params.minCosignatures)
+        if (verifiedCosigners.size() < params.minCosignatures)
         {
-            throw new SecurityException("Insufficient valid cosignatures: " + validCount +
+            throw new SecurityException("Insufficient valid cosignatures: " + verifiedCosigners.size() +
                 " < " + params.minCosignatures);
+        }
+
+        // Section 7.3: every cosigner requirement in the policy must hold.
+        for (CosignerRequirement requirement : params.cosignerRequirements)
+        {
+            if (!requirement.isSatisfiedBy(verifiedCosigners, caId))
+            {
+                throw new SecurityException("Cosigner requirement not satisfied: " + requirement);
+            }
         }
 
         return true;
@@ -586,12 +639,12 @@ public class MerkleTreeCertificateValidator
             computeEntryHash(tbsCertDer, EMPTY_EXTENSIONS_WIRE, hashFunc), inclusionProof);
     }
 
-    /** Wire encoding of an empty {@code MerkleTreeCertEntryExtension extensions<0..2^16-1>} (the uint16 length prefix 0x0000). */
+    /** Wire encoding of an empty {@code MTCLogEntryExtension extensions<0..2^16-1>} (the uint16 length prefix 0x0000). */
     private static final byte[] EMPTY_EXTENSIONS_WIRE = new byte[]{0, 0};
 
     /**
      * Computes the entry hash for a certificate by transforming its TBSCertificate
-     * into the equivalent {@code MerkleTreeCertEntry} of type {@code tbs_cert_entry}
+     * into the equivalent {@code MTCLogEntry} of type {@code tbs_cert_entry}
      * and hashing per Section 5.2.1 / Section 7.2.
      *
      * <p>The single-pass procedure (Section 7.2):</p>
@@ -660,7 +713,7 @@ public class MerkleTreeCertificateValidator
      * {@code hashFunc.hashLeaf(baos.toByteArray())}, but lets callers pipe the
      * bytes directly into a streaming digest (e.g.
      * {@code org.bouncycastle.crypto.io.DigestOutputStream} or
-     * {@code java.security.DigestOutputStream}) so the {@code MerkleTreeCertEntry}
+     * {@code java.security.DigestOutputStream}) so the {@code MTCLogEntry}
      * never lives fully in memory.
      *
      * <p>{@code hashFunc} is still required because Section 7.2's single-pass
@@ -721,9 +774,9 @@ public class MerkleTreeCertificateValidator
         // Step 1 of the single-pass procedure: write the extensions wire bytes
         // (the uint16 length prefix plus each extension's bytes).
         out.write(extensionsWire);
-        // MerkleTreeCertEntryType.tbs_cert_entry as a big-endian uint16.
-        out.write((MerkleTreeCertEntryType.TBS_CERT_ENTRY >>> 8) & 0xFF);
-        out.write(MerkleTreeCertEntryType.TBS_CERT_ENTRY & 0xFF);
+        // MTCLogEntryType.tbs_cert_entry as a big-endian uint16.
+        out.write((MTCLogEntryType.TBS_CERT_ENTRY >>> 8) & 0xFF);
+        out.write(MTCLogEntryType.TBS_CERT_ENTRY & 0xFF);
 
         int size = tbsSeq.size();
         int idx = 0;
@@ -782,12 +835,11 @@ public class MerkleTreeCertificateValidator
     /**
      * Extracts the binary CA trust anchor ID from the issuer field of a Merkle
      * Tree certificate. Per Section 5.1 of the draft the issuer name has a single
-     * RDN with a single attribute. For initial experimentation the attribute
-     * type is {@code id_rdna_trustAnchorID} ({@code 1.3.6.1.4.1.44363.47.1})
-     * with a UTF8String value of the dotted-decimal trust anchor ID; for the
-     * production encoding the value is a RELATIVE-OID. Both are accepted; the
-     * return value is the binary trust anchor ID per Section 3 of
-     * draft-ietf-tls-trust-anchor-ids.
+     * RDN with a single attribute of type {@code id-rdna-trustAnchorID}
+     * ({@code 1.3.6.1.5.5.7.25.3}) whose value is a RELATIVE-OID carrying the
+     * trust anchor ID. The UTF8String dotted-decimal form that earlier drafts
+     * used for experimentation is still accepted. The return value is the binary
+     * trust anchor ID per Section 4 of draft-ietf-tls-trust-anchor-ids.
      */
     public static byte[] extractCaIdFromIssuer(X500Name issuer)
         throws IOException

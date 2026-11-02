@@ -2,10 +2,10 @@ package org.bouncycastle.cert.plants.bc;
 
 import java.io.IOException;
 
-import org.bouncycastle.cert.plants.MTCCosignedMessage;
+import org.bouncycastle.cert.plants.MTCCosignedSubtree;
 import org.bouncycastle.cert.plants.MTCCosigner;
 import org.bouncycastle.cert.plants.MTCLog;
-import org.bouncycastle.cert.plants.MTCSignature;
+import org.bouncycastle.cert.plants.MTCCosignature;
 import org.bouncycastle.crypto.CryptoException;
 import org.bouncycastle.crypto.Signer;
 import org.bouncycastle.crypto.params.AsymmetricKeyParameter;
@@ -15,12 +15,13 @@ import org.bouncycastle.util.Exceptions;
 /**
  * Lightweight implementation of {@link MTCCosigner} for the MTC signature
  * algorithms named in {@link org.bouncycastle.cert.plants.MTCSignatureAlgorithm},
- * permitted by Section 5.3.3 of draft-ietf-plants-merkle-tree-certs:
+ * the algorithms this package binds (the draft itself fixes no list; see
+ * {@code MTCSignatureAlgorithm}):
  * {@code "ECDSA-P256-SHA256"}, {@code "ECDSA-P384-SHA384"}, {@code "Ed25519"},
  * {@code "ML-DSA-44"}, {@code "ML-DSA-65"}, {@code "ML-DSA-87"}.
  *
  * <p>Symmetric counterpart of {@link BcMTCSignatureVerifier} — encapsulates
- * the {@link MTCCosignedMessage} encode plus the underlying lightweight
+ * the {@link MTCCosignedSubtree} encode plus the underlying lightweight
  * {@link Signer} ceremony.</p>
  */
 public class BcMTCCosigner
@@ -60,16 +61,16 @@ public class BcMTCCosigner
         return Arrays.clone(cosignerId);
     }
 
-    public MTCSignature cosignSubtree(MTCLog log, byte[] subtreeHash)
+    public MTCCosignature cosignSubtree(MTCLog log, byte[] subtreeHash)
         throws IOException
     {
-        byte[] msg = MTCCosignedMessage.encode(log, subtreeHash, cosignerId);
+        byte[] msg = MTCCosignedSubtree.encode(log, subtreeHash, cosignerId);
         Signer signer = BcMTCSigners.createSigner(algorithm);
         signer.init(true, privateKey);
         signer.update(msg, 0, msg.length);
         try
         {
-            return new MTCSignature(cosignerId, signer.generateSignature());
+            return new MTCCosignature(cosignerId, signer.generateSignature());
         }
         catch (CryptoException e)
         {

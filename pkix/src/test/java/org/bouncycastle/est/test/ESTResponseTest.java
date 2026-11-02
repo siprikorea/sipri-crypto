@@ -13,6 +13,7 @@ import javax.net.ssl.SSLSession;
 
 import junit.framework.TestCase;
 import org.bouncycastle.est.ESTResponse;
+import org.bouncycastle.est.LimitedSource;
 import org.bouncycastle.est.Source;
 import org.bouncycastle.util.Strings;
 import org.bouncycastle.util.encoders.Base64;
@@ -104,6 +105,120 @@ public class ESTResponseTest
         catch (IOException e)
         {
             fail("Error reading input stream data: " + e.getMessage());
+        }
+    }
+
+    /**
+     * Every header line was added to the header table by copying that header's value array, so a
+     * response repeating one header many times was quadratic to parse: about 7 seconds per
+     * megabyte of header lines, before any read limit applied. The values are collected once now.
+     * <p>
+     * The check is on how the parse time grows rather than on a wall-clock bound, so it holds on
+     * a slow or loaded machine: eight times the header lines should cost about eight times as
+     * much, where the quadratic version cost about sixty-four times as much.
+     */
+    public void testManyHeaderLinesStayLinear()
+        throws IOException
+    {
+        int small = 50000;
+        int large = 8 * small;
+
+        ESTResponse response = new ESTResponse(null, getMockSource(new ByteArrayInputStream(headerLines(large))));
+        assertEquals(large, ((String[])((Map)response.getHeaders()).get("x")).length);
+        assertEquals("0", response.getHeader("Content-Length"));
+
+        long smallTime = minParseNanos(headerLines(small), 3);
+        long largeTime = minParseNanos(headerLines(large), 3);
+
+        assertTrue("parse time grew by " + (largeTime / Math.max(smallTime, 1L)) + "x for 8x the header lines ("
+            + smallTime / 1000000 + "ms, " + largeTime / 1000000 + "ms)", largeTime < 24 * smallTime);
+    }
+
+    private long minParseNanos(byte[] data, int runs)
+        throws IOException
+    {
+        long best = Long.MAX_VALUE;
+        for (int i = 0; i != runs; i++)
+        {
+            long start = System.nanoTime();
+            new ESTResponse(null, getMockSource(new ByteArrayInputStream(data)));
+            best = Math.min(best, System.nanoTime() - start);
+        }
+        return best;
+    }
+
+    private static byte[] headerLines(int lines)
+    {
+        StringBuilder sb = new StringBuilder("HTTP/1.1 200 OK\r\n");
+        for (int i = 0; i < lines; i++)
+        {
+            sb.append("x: a\r\n");
+        }
+        sb.append("Content-Length: 0\r\n\r\n");
+
+        return Strings.toByteArray(sb.toString());
+    }
+
+    /** The absolute read limit of a LimitedSource covers the header block, not only the body. */
+    public void testHeaderBlockCountsAgainstReadLimit()
+        throws IOException
+    {
+        StringBuilder sb = new StringBuilder("HTTP/1.1 200 OK\r\n");
+        for (int i = 0; i < 2000; i++)
+        {
+            sb.append("x: a\r\n");
+        }
+        sb.append("Content-Length: 0\r\n\r\n");
+        final byte[] data = Strings.toByteArray(sb.toString());
+
+        // within the limit
+        new ESTResponse(null, new LimitedMockSource(data, data.length + 1));
+
+        try
+        {
+            new ESTResponse(null, new LimitedMockSource(data, 4096));
+            fail("header block over the read limit was accepted");
+        }
+        catch (IOException e)
+        {
+            assertEquals("Absolute Read Limit exceeded by headers: 4096", e.getMessage());
+        }
+    }
+
+    private static class LimitedMockSource
+        implements Source<SSLSession>, LimitedSource
+    {
+        private final byte[] data;
+        private final long limit;
+
+        LimitedMockSource(byte[] data, long limit)
+        {
+            this.data = data;
+            this.limit = limit;
+        }
+
+        public InputStream getInputStream()
+        {
+            return new ByteArrayInputStream(data);
+        }
+
+        public OutputStream getOutputStream()
+        {
+            return null;
+        }
+
+        public SSLSession getSession()
+        {
+            return null;
+        }
+
+        public void close()
+        {
+        }
+
+        public Long getAbsoluteReadLimit()
+        {
+            return Long.valueOf(limit);
         }
     }
 

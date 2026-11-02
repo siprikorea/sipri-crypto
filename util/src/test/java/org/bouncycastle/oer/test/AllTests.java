@@ -43,6 +43,14 @@ public class AllTests
         suite.addTestSuite(OERInputStreamLimitTest.class);
         suite.addTestSuite(OERInputStreamMalformedTest.class);
         suite.addTestSuite(OERTypeGuardTest.class);
+        suite.addTestSuite(TestFromVector.class);
+        suite.addTestSuite(OEREnumeratedTest.class);
+        suite.addTestSuite(OERIntegerTest.class);
+        suite.addTestSuite(OERDeterminantTest.class);
+        suite.addTestSuite(OERBitStringTest.class);
+        suite.addTestSuite(BitBuilderTest.class);
+        suite.addTestSuite(OERChoiceTagTest.class);
+        suite.addTestSuite(EccP256CurvePointTest.class);
 
         return new BCTestSetup(suite);
     }

@@ -260,7 +260,7 @@ public class CMSAuthEnvelopedDataParser
 
             if (set != null)
             {
-                authAttrSet = (ASN1Set)set.toASN1Primitive();
+                authAttrSet = ASN1Set.getInstance(set.getLoadedObject());
             }
 
             authAttrNotRead = false;
@@ -270,7 +270,7 @@ public class CMSAuthEnvelopedDataParser
     }
 
     /**
-     * return a table of the unauthenticated attributes indexed by
+     * return a table of the authenticated attributes indexed by
      * the OID of the attribute.
      */
     public AttributeTable getAuthAttrs()
@@ -282,7 +282,7 @@ public class CMSAuthEnvelopedDataParser
 
             if (set != null)
             {
-                authAttrs = new AttributeTable(set);
+                authAttrs = CMSUtils.getAttributeTable(set);
             }
         }
 

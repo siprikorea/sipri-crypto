@@ -716,7 +716,7 @@ public class OpenPGPCertificate
         // Check if there are signatures at all for the component
         OpenPGPSignatureChains chainsForComponent = getAllSignatureChainsFor(component)
             .fromOrigin(origin);
-        boolean isPrimaryKey = component == getPrimaryKey();
+        boolean isPrimaryKey = component.getPublicComponent() == getPrimaryKey();
         if (isPrimaryKey && chainsForComponent.getCertificationAt(evaluationDate) == null)
         {
             // If cert has no direct-key signatures, consider primary UID bindings instead.
@@ -769,7 +769,7 @@ public class OpenPGPCertificate
 
         // Key Signatures
         addSignaturesToChains(keySignatures, keySignatureChains);
-        componentSignatureChains.put(primaryKey, keySignatureChains);
+        componentSignatureChains.put(primaryKey, keySignatureChains.removeBrokenSelfSigs(implementation.pgpContentVerifierBuilderProvider(), policy));
 
         // Identities
         for (Iterator<OpenPGPIdentityComponent> it = primaryKey.identityComponents.iterator(); it.hasNext(); )
@@ -787,7 +787,7 @@ public class OpenPGPCertificate
                 bindings = primaryKey.getUserAttributeSignatures((OpenPGPUserAttribute)identity);
             }
             addSignaturesToChains(bindings, identityChains);
-            componentSignatureChains.put(identity, identityChains);
+            componentSignatureChains.put(identity, identityChains.removeBrokenSelfSigs(implementation.pgpContentVerifierBuilderProvider(), policy));
         }
     }
 
@@ -823,7 +823,7 @@ public class OpenPGPCertificate
                 subkeyChains.add(new OpenPGPSignatureChain(OpenPGPSignatureChain.Link.create(sig)));
             }
         }
-        this.componentSignatureChains.put(subkey, subkeyChains);
+        this.componentSignatureChains.put(subkey, subkeyChains.removeBrokenSelfSigs(implementation.pgpContentVerifierBuilderProvider(), policy));
     }
 
     /**
@@ -874,7 +874,7 @@ public class OpenPGPCertificate
 
         // An expired primary key can no longer certify, so a longer-lived subkey it bound is not usable either.
         OpenPGPComponentKey primaryKey = getPrimaryKey();
-        if (component != primaryKey && isExpired(primaryKey, evaluationTime))
+        if (component.getPublicComponent() != primaryKey && isExpired(primaryKey, evaluationTime))
         {
             return false;
         }
@@ -1844,13 +1844,13 @@ public class OpenPGPCertificate
             PGPSignatureSubpacketVector hashedSubpackets = keySignature.getSignature().getHashedSubPackets();
             if (hashedSubpackets == null || !hashedSubpackets.hasSubpacket(subpacketType))
             {
-                if (subpacketType == SignatureSubpacketTags.KEY_FLAGS && this instanceof OpenPGPSubkey)
+                if (subpacketType == SignatureSubpacketTags.KEY_FLAGS && getPublicComponent() instanceof OpenPGPSubkey)
                 {
                     // Key Flags apply to the key their signature refers to (RFC9580, section 5.2.3.29) - not inherited
                     return null;
                 }
 
-                if (subpacketType == SignatureSubpacketTags.KEY_EXPIRE_TIME && this instanceof OpenPGPSubkey)
+                if (subpacketType == SignatureSubpacketTags.KEY_EXPIRE_TIME && getPublicComponent() instanceof OpenPGPSubkey)
                 {
                     // Key Expiration Time is counted from the creation time of the key it is on (RFC9580, section 5.2.3.13) - not inherited
                     return null;
@@ -1908,6 +1908,11 @@ public class OpenPGPCertificate
                     {
                         OpenPGPSignatureChain externalChain = issuerKey.getSelfSignatureChains()
                             .getChainAt(rootLink.getSignature().getCreationTime());
+                        if (externalChain == null)
+                        {
+                            // issuing key not validly bound at signature creation time
+                            continue;
+                        }
                         externalChain = externalChain.plus(
                             new OpenPGPComponentSignature(rootLink.signature.getSignature(), issuerKey, this));
                         chainsBy.add(externalChain);
@@ -4007,7 +4012,13 @@ public class OpenPGPCertificate
         }
 
         /**
-         * Return a positive certification chain for the component for the given evaluationTime.
+         * Return the latest positive certification chain for the component which is effective at the given
+         * evaluationTime and cryptographically valid.
+         * <p>
+         * RFC 9580, section 5.2.3.10: "An implementation that encounters multiple self-signatures on the same
+         * object MUST select the most recent valid self-signature and ignore all other self-signatures."
+         * A chain which does not verify is therefore skipped rather than returned, so that an appended
+         * signature which does not verify can neither shadow nor displace an older one which does.
          *
          * @param evaluationTime time for which validity of the {@link OpenPGPCertificateComponent} is checked.
          * @return positive certification chain or null
@@ -4019,12 +4030,31 @@ public class OpenPGPCertificate
                 OpenPGPSignatureChain chain = it.next();
                 boolean isEffective = chain.isEffectiveAt(evaluationTime);
                 boolean isCertification = chain.isCertification();
-                if (isEffective && isCertification)
+                if (isEffective && isCertification && isValidChain(chain))
                 {
                     return chain;
                 }
             }
             return null;
+        }
+
+        /**
+         * Return true if the given chain verifies, false if it does not or cannot be verified.
+         *
+         * @param chain signature chain
+         * @return true if the chain is valid
+         */
+        private static boolean isValidChain(OpenPGPSignatureChain chain)
+        {
+            try
+            {
+                return chain.isValid();
+            }
+            catch (PGPSignatureException e)
+            {
+                // incorrect, rejected by policy or missing its issuer
+                return false;
+            }
         }
 
         /**
@@ -4048,7 +4078,8 @@ public class OpenPGPCertificate
         }
 
         /**
-         * Return a negative certification chain for the component for the given evaluationTime.
+         * Return the latest negative certification chain for the component which is effective at the given
+         * evaluationTime and cryptographically valid. A revocation which does not verify is skipped.
          *
          * @param evaluationTime time for which revocation-ness of the {@link OpenPGPCertificateComponent} is checked.
          * @return negative certification chain or null
@@ -4058,12 +4089,52 @@ public class OpenPGPCertificate
             for (Iterator<OpenPGPSignatureChain> it = chains.iterator(); it.hasNext(); )
             {
                 OpenPGPSignatureChain chain = it.next();
-                if (chain.isRevocation() && chain.isEffectiveAt(evaluationTime))
+                if (chain.isRevocation() && chain.isEffectiveAt(evaluationTime) && isValidChain(chain))
                 {
                     return chain;
                 }
             }
             return null;
+        }
+
+        /**
+         * Return an {@link OpenPGPSignatureChains} instance with chains with broken self-signatures removed.
+         * This is done by attempting to verify signature chains where possible.
+         * Signatures by third-party keys cannot be verified, so their chains are left as-is.
+         * However, malformed, broken signatures are filtered out by this method, so broken signatures do not
+         * invalidate certificate components.
+         *
+         * @param verifier verifier builder provider
+         * @param policy policy
+         * @return signature chains with broken self-sigs filtered out
+         */
+        private OpenPGPSignatureChains removeBrokenSelfSigs(PGPContentVerifierBuilderProvider verifier, OpenPGPPolicy policy)
+        {
+            OpenPGPSignatureChains retain = new OpenPGPSignatureChains(targetComponent);
+            for (Iterator<OpenPGPSignatureChain> it = chains.iterator(); it.hasNext(); )
+            {
+                OpenPGPSignatureChain chain = it.next();
+                boolean isSelfSig = chain.getRootLinkIssuer() != null;
+                if (!isSelfSig)
+                {
+                    retain.add(chain);
+                    continue;
+                }
+
+                try
+                {
+                    // Attempt to verify self-signatures
+                    if (chain.isValid(verifier, policy))
+                    {
+                        retain.add(chain);
+                    }
+                }
+                catch (PGPSignatureException e)
+                {
+                    // Ignore broken chain
+                }
+            }
+            return retain;
         }
 
         @Override
@@ -4100,7 +4171,9 @@ public class OpenPGPCertificate
         }
 
         /**
-         * Return the latest chain, which is valid at the given evaluation time.
+         * Return the latest chain, certification or revocation, which is effective at the given evaluation
+         * time and cryptographically valid. A chain which does not verify is skipped, so that an appended
+         * signature which does not verify - a revocation included - cannot displace one which does.
          *
          * @param evaluationDate reference time
          * @return latest valid chain
@@ -4108,10 +4181,13 @@ public class OpenPGPCertificate
         public OpenPGPSignatureChain getChainAt(Date evaluationDate)
         {
             OpenPGPSignatureChains atDate = getChainsAt(evaluationDate);
-            Iterator<OpenPGPSignatureChain> it = atDate.chains.iterator();
-            if (it.hasNext())
+            for (Iterator<OpenPGPSignatureChain> it = atDate.chains.iterator(); it.hasNext(); )
             {
-                return it.next();
+                OpenPGPSignatureChain chain = it.next();
+                if (isValidChain(chain))
+                {
+                    return chain;
+                }
             }
             return null;
         }

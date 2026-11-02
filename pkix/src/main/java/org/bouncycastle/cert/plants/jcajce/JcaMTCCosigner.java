@@ -7,10 +7,10 @@ import java.security.Provider;
 import java.security.Signature;
 import java.security.interfaces.ECKey;
 
-import org.bouncycastle.cert.plants.MTCCosignedMessage;
+import org.bouncycastle.cert.plants.MTCCosignedSubtree;
 import org.bouncycastle.cert.plants.MTCCosigner;
 import org.bouncycastle.cert.plants.MTCLog;
-import org.bouncycastle.cert.plants.MTCSignature;
+import org.bouncycastle.cert.plants.MTCCosignature;
 import org.bouncycastle.cert.plants.MTCSignatureAlgorithm;
 import org.bouncycastle.jcajce.util.DefaultJcaJceHelper;
 import org.bouncycastle.jcajce.util.JcaJceHelper;
@@ -21,17 +21,18 @@ import org.bouncycastle.util.Arrays;
 /**
  * JCA-side implementation of {@link MTCCosigner} for the MTC signature
  * algorithms named in {@link org.bouncycastle.cert.plants.MTCSignatureAlgorithm},
- * permitted by Section 5.3.3 of draft-ietf-plants-merkle-tree-certs:
+ * the algorithms this package binds (the draft itself fixes no list; see
+ * {@code MTCSignatureAlgorithm}):
  * {@code "ECDSA-P256-SHA256"}, {@code "ECDSA-P384-SHA384"}, {@code "Ed25519"},
  * {@code "ML-DSA-44"}, {@code "ML-DSA-65"}, {@code "ML-DSA-87"}.
  *
  * <p>Symmetric counterpart of {@link JcaMTCSignatureVerifier} — encapsulates
- * the {@link MTCCosignedMessage} encode plus the underlying JCA
- * {@link Signature} ceremony. The draft identifiers are mapped to JCA Signature
- * names internally; the plain (r||s) ECDSA encoding used by MTCProof requires
- * {@code SHA256WITHPLAIN-ECDSA} / {@code SHA384WITHPLAIN-ECDSA}, which BC's
- * JCE provider registers (DER-encoded {@code SHA256withECDSA} is wire-incompatible
- * with the MTCProof signature byte format).</p>
+ * the {@link MTCCosignedSubtree} encode plus the underlying JCA
+ * {@link Signature} ceremony. The algorithm names are mapped to JCA Signature
+ * names internally; the two ECDSA names map to {@code SHA256withECDSA} /
+ * {@code SHA384withECDSA}, so an ECDSA cosignature is the DER-encoded X9.62
+ * {@code ECDSA-Sig-Value}, the form the working group's reference
+ * implementation uses.</p>
  *
  * <p>Instances are created via {@link Builder}.</p>
  */
@@ -56,16 +57,16 @@ public class JcaMTCCosigner
         return Arrays.clone(cosignerId);
     }
 
-    public MTCSignature cosignSubtree(MTCLog log, byte[] subtreeHash)
+    public MTCCosignature cosignSubtree(MTCLog log, byte[] subtreeHash)
         throws IOException
     {
-        byte[] msg = MTCCosignedMessage.encode(log, subtreeHash, cosignerId);
+        byte[] msg = MTCCosignedSubtree.encode(log, subtreeHash, cosignerId);
         try
         {
             Signature sig = helper.createSignature(JcaMTCSignatureVerifier.jcaAlgorithm(algorithm));
             sig.initSign(privateKey);
             sig.update(msg);
-            return new MTCSignature(cosignerId, sig.sign());
+            return new MTCCosignature(cosignerId, sig.sign());
         }
         catch (GeneralSecurityException e)
         {

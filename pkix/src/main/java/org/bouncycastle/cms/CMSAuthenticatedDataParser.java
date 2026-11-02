@@ -121,6 +121,7 @@ public class CMSAuthenticatedDataParser
         try
         {
             this.authAttrNotRead = true;
+            this.unauthAttrNotRead = true;
 
             ASN1SequenceParser content = (ASN1SequenceParser)_contentInfo.getContent(BERTags.SEQUENCE);
             if (content == null)
@@ -142,7 +143,7 @@ public class CMSAuthenticatedDataParser
             //
             // read the recipients
             //
-            ASN1Set recipientInfos = ASN1Set.getInstance(authData.getRecipientInfos().toASN1Primitive());
+            ASN1Set recipientInfos = ASN1Set.getInstance(authData.getRecipientInfos().getLoadedObject());
 
             this.macAlg = authData.getMacAlgorithm();
 
@@ -241,7 +242,7 @@ public class CMSAuthenticatedDataParser
     }
 
     /**
-     * return the ASN.1 encoded encryption algorithm parameters, or null if
+     * return the ASN.1 encoded MAC algorithm parameters, or null if
      * there aren't any.
      */
     public byte[] getMacAlgParams()
@@ -252,7 +253,7 @@ public class CMSAuthenticatedDataParser
         }
         catch (Exception e)
         {
-            throw new RuntimeException("exception getting encryption parameters " + e);
+            throw new RuntimeException("exception getting MAC parameters " + e);
         }
     }
 
@@ -284,7 +285,7 @@ public class CMSAuthenticatedDataParser
 
             if (set != null)
             {
-                authAttrSet = (ASN1Set)set.toASN1Primitive();
+                authAttrSet = ASN1Set.getInstance(set.getLoadedObject());
             }
 
             // RFC 5652 sec 9.1: digestAlgorithm and authAttrs are set together. The secureReadable
@@ -306,7 +307,7 @@ public class CMSAuthenticatedDataParser
     }
 
     /**
-     * return a table of the unauthenticated attributes indexed by
+     * return a table of the authenticated attributes indexed by
      * the OID of the attribute.
      *
      * @throws java.io.IOException
@@ -320,7 +321,7 @@ public class CMSAuthenticatedDataParser
 
             if (set != null)
             {
-                authAttrs = new AttributeTable(set);
+                authAttrs = CMSUtils.getAttributeTable(set);
             }
         }
 
@@ -338,6 +339,7 @@ public class CMSAuthenticatedDataParser
     {
         if (unauthAttrs == null && unauthAttrNotRead)
         {
+            getMac();     // the unauthenticated attributes follow the authenticated attributes and the mac
             unauthAttrNotRead = false;
             unauthAttrs = CMSUtils.getAttributesTable(authData.getUnauthAttrs());
         }

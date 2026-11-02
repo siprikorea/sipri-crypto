@@ -108,7 +108,8 @@ ANT_HOME=/opt/apache-ant-1.6.5 JAVA_HOME=/opt/jdk1.4.2 /opt/apache-ant-1.6.5/bin
   `org.bouncycastle.pqc.crypto.hqc` with the signed provider jar — `GFTest` lives in that
   main-namespace package to reach the package-private `GF` — so an unsigned `bctest` fails
   that suite with `SecurityException: class "…hqc.GF"'s signer information does not match
-  signer information of other classes in the same package`. The `test` target **cannot**
+  signer information of other classes in the same package`. `org.bouncycastle.pqc.crypto.ntruprime`
+  is shared the same way, for `UtilsTest` and the package-private `Utils`. The `test` target **cannot**
   work here: its `build-test` dependency re-jars `bctest` on *every* invocation (ant's
   `init` re-copies and re-preprocesses the sources, so javac always has work to do), which
   strips the signature again after `bcsign4` ran. `test-signed` delegates to the same junit
@@ -202,6 +203,18 @@ that hole today; `SpreadCertificateStatusTest` was given a targeted include
 compiled. The contamination half does *not* fire here — the `build-tls` copy in `bc+-build.xml`
 already carries `<exclude name="**/*Test.java"/>`, so unlike `bcprov` these never leak into the
 shipped `bctls` jar (`unzip -l bctls-jdk14-*.jar | grep -cE 'Test\.class'` should stay 0).
+
+**Test *helpers* in that package are the other half of the trap**, and the `*Test.java` exclude does
+not catch them. The DTLS 1.3 work added `DTLS13HandshakeTestSupport`, `DTLSRecordLayer13TestSupport`
+and `DTLS13KeyUpdateTestSupport` to `org.bouncycastle.tls` (they reach package-private members), none
+named `*Test`. The jdk1.4 and jdk1.3 builds stage the whole tls test tree, so the `build-tls` copy
+swept all three into `bctls` — and the first two reference excluded `*Test` classes, which breaks the
+provider compile outright. `build-tls` now also excludes `**/*TestSupport.java`; name any such helper
+that way. The one helper a `tls.test` class needs, `DTLS13KeyUpdateTestSupport` (for
+`DTLS13ProtocolTest`), gets a targeted `build-test` include next to the `SpreadCertificateStatusTest`
+one, and `ant/jdk15+.xml` — whose staging excludes `**/tls/*.java` wholesale — stages it with its own
+fileset, or `bctest-jdk15to18` fails to compile `DTLS13ProtocolTest`. A helper included this way must
+compile against `bctls` alone: no references to other test classes.
 
 Adding the include compiles the class but does **not** run it: the `test` target's batchtest runs
 `**/AllTests.java` out of the staged bctest source tree, and `ant/jdk14.xml` (around line 283)

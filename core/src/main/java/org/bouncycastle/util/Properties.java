@@ -39,7 +39,11 @@ public class Properties
     /**
      * The PBE iteration count the PKCS12 keystore uses when <b>writing</b> a file - the write-side
      * counterpart of {@link #PKCS12_MAX_IT_COUNT}, which only bounds what is accepted on load.
-     * Default 600,000 for the key and certificate encryption, twice that for the integrity MAC.
+     * Default 300,000 for the key and certificate encryption, twice that for the integrity MAC.
+     * <p>
+     * Note that Windows currently reports an error importing a PKCS#12 file whose key and
+     * certificate encryption uses a PBE iteration count of 600,000 or greater (it accepts 600,000
+     * for the MAC), so setting this property to 600,000 or more produces files Windows may refuse.
      * <p>
      * Lowering this trades password-cracking resistance for store/load time, and is only worth
      * doing where something other than the passphrase carries the confidentiality of the file -
@@ -81,7 +85,8 @@ public class Properties
     public static final String X509_CRL_CACHE_TTL = "org.bouncycastle.x509.crl_cache_ttl";
 
     /**
-     * If set to "true", the BC CertPath validator and X509RevocationChecker will attempt to
+     * If set to "true", the BC CertPath validator, X509RevocationChecker and both PKIXCertPathReviewer
+     * classes (and so SignedMailValidator, which uses the pkix one by default) will attempt to
      * download CRLs over the network using URIs from each certificate's CRL Distribution Points
      * extension when no PKIXCRLStore on the supplied PKIXParameters can satisfy the lookup.
      * Default (unset / "false") preserves the legacy behaviour of relying entirely on caller-supplied
@@ -146,6 +151,13 @@ public class Properties
      * ignored and the default used.
      */
     public static final String OPENPGP_MAX_ARMOR_HEADERS = "org.bouncycastle.openpgp.max_armor_headers";
+
+    /**
+     * If set to "true", BCPGInputStream rejects a packet whose first Partial Body Length is less than 512 octets, which
+     * RFC 9580 sec. 4.2.1.4 forbids. Off by default, so that messages written by earlier versions of BC with a
+     * partial-body buffer shorter than 512 bytes (which BCPGOutputStream no longer produces) can still be read.
+     */
+    public static final String OPENPGP_STRICT_PARTIAL_BODY_LENGTH = "org.bouncycastle.openpgp.strict_partial_body_length";
 
     /**
      * If set to "true", the BC PKCS#12 KeyStore will additionally accept (on load only)
@@ -558,6 +570,17 @@ public class Properties
     public static final String CMS_ALLOW_LEGACY_KEYAGREE_KDF = "org.bouncycastle.cms.allow_legacy_keyagree_kdf";
 
     /**
+     * The largest number of distinct digest algorithms BC will compute over the content of one
+     * SignedData message: the content digests CMSSignedData computes while its signers are verified
+     * (one per digest algorithm, shared by the signers using it) and the digest calculators
+     * CMSSignedDataParser runs over the content for the message's digestAlgorithms field. Each
+     * algorithm beyond the limit raises a CMSException. Unset or 0, the default, leaves the number
+     * unlimited, so the work a sender can demand is the content length times the algorithms it
+     * names. Read via {@link #asInteger(String, int)}.
+     */
+    public static final String CMS_MAX_DIGEST_ALGORITHMS = "org.bouncycastle.cms.max_digest_algorithms";
+
+    /**
      * The largest SEED, in bytes, accepted in an LMS or HSS private key encoding. Default 1024.
      * <p>
      * SP 800-208 sec. 6.1 makes SEED n bytes (24 or 32 for the defined parameter sets), so the default is far
@@ -566,6 +589,46 @@ public class Properties
      * shorter than that.
      */
     public static final String LMS_MAX_SEED_LENGTH = "org.bouncycastle.lms.max_seed_length";
+
+    /**
+     * Whether a time-stamp token whose signing-time signed attribute disagrees with the genTime of its
+     * TSTInfo is accepted. Default false.
+     * <p>
+     * Both values are the TSA's own statement of when the token was produced, so a genuine RFC 3161 token
+     * carries either no signing-time attribute or one within the token's accuracy of genTime. The
+     * {@code TimeStampToken} constructor rejects a token in which the two differ by more than the accuracy
+     * plus a one minute allowance; set to "true" to accept such a token regardless. Read via
+     * {@link #isOverrideSet(String)}.
+     */
+    public static final String TSP_ALLOW_INCONSISTENT_SIGNING_TIME = "org.bouncycastle.tsp.allow_inconsistent_signing_time";
+
+    /**
+     * The hash algorithms {@code TimeStampToken.validate(SignerInformationVerifier)} accepts for a token's message
+     * imprint, as a comma separated list of digest names or dotted OIDs (for example "SHA-256,SHA-384,SHA-512").
+     * If not set, {@code TSPAlgorithms.ALLOWED} is used. Read via {@link #asKeySet(String)}.
+     */
+    public static final String TSP_ALLOWED_IMPRINT_ALGORITHMS = "org.bouncycastle.tsp.allowed_imprint_algorithms";
+
+    /**
+     * Selects the crypto services constraint {@code CryptoServicesRegistrar} installs at start-up when
+     * no other is set: "nist" for the NIST IR 8547 timetable on the quantum-vulnerable public-key
+     * algorithms (deprecated after 2030, disallowed after 2035 except for verification and decryption),
+     * "log" to log their use, "legacy" to refuse them for anything but verification and decryption,
+     * "reject" to refuse them outright, and "none" - the default when unset - for no constraint (see
+     * {@code QuantumVulnerableConstraint.forPolicy(String)}). A constraint installed this way can be
+     * replaced through {@code CryptoServicesRegistrar.setServicesConstraints()} only when
+     * {@link #CONSTRAINTS_ALLOW_OVERRIDE} is set. An unrecognised value is logged as a warning and
+     * no constraint is installed. Read once, via {@link #getPropertyValue(String)}, when
+     * {@code CryptoServicesRegistrar} is loaded.
+     */
+    public static final String CONSTRAINTS_QUANTUM_VULNERABLE = "org.bouncycastle.constraints.quantum_vulnerable";
+
+    /**
+     * Set to "true" to let {@code CryptoServicesRegistrar.setServicesConstraints()} replace a constraint
+     * installed from a property at start-up, such as {@link #CONSTRAINTS_QUANTUM_VULNERABLE}; otherwise
+     * such an attempt is logged and ignored. Read via {@link #isOverrideSet(String)}.
+     */
+    public static final String CONSTRAINTS_ALLOW_OVERRIDE = "org.bouncycastle.constraints.allow_override";
 
     private Properties()
     {

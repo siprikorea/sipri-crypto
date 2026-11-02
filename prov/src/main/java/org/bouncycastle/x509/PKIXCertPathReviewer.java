@@ -2,6 +2,7 @@ package org.bouncycastle.x509;
 
 import java.io.ByteArrayInputStream;
 import java.io.IOException;
+import java.io.InputStream;
 import java.math.BigInteger;
 import java.net.HttpURLConnection;
 import java.net.InetAddress;
@@ -125,6 +126,9 @@ public class PKIXCertPathReviewer extends CertPathValidatorUtilities
     protected List[] notifications;
     protected List[] errors;
     protected TrustAnchor trustAnchor;
+
+    // true while the certificate being checked chains, by verified signatures, to a trust anchor
+    private boolean issuerChainVerified;
     protected PublicKey subjectPublicKey;
     protected PolicyNode policyTree;
     
@@ -444,6 +448,37 @@ public class PKIXCertPathReviewer extends CertPathValidatorUtilities
         
         // (b)  and (c)
         PKIXNameConstraintValidator nameConstraintValidator = new PKIXNameConstraintValidator();
+
+        // RFC 5280 sec. 6.1.2 (b) and (c): start from the trust anchor's name constraints, if it carries any
+        if (trustAnchor != null && trustAnchor.getNameConstraints() != null)
+        {
+            try
+            {
+                NameConstraints anchorNc = NameConstraints.getInstance(
+                    ASN1Primitive.fromByteArray(trustAnchor.getNameConstraints()));
+
+                GeneralSubtree[] permitted = anchorNc.getPermittedSubtrees();
+                if (permitted != null)
+                {
+                    nameConstraintValidator.intersectPermittedSubtree(permitted);
+                }
+
+                GeneralSubtree[] excluded = anchorNc.getExcludedSubtrees();
+                if (excluded != null)
+                {
+                    for (int c = 0; c != excluded.length; c++)
+                    {
+                        nameConstraintValidator.addExcludedSubtree(excluded[c]);
+                    }
+                }
+            }
+            catch (Exception e)
+            {
+                ErrorBundle msg = new ErrorBundle(RESOURCE_NAME,"CertPathReviewer.ncTrustAnchorError");
+                addError(msg);
+                return;
+            }
+        }
 
         // RFC 5280 sec. 4.2.1.10: the name constraints extension MUST be used
         // only in a CA certificate. The path validation algorithm never
@@ -869,6 +904,7 @@ public class PKIXCertPathReviewer extends CertPathValidatorUtilities
 
         X509Certificate cert = null;
         int i;
+        boolean chainVerified = (workingPublicKey != null);
 
         for (int index = certs.size() - 1; index >= 0; index--)
         {
@@ -894,6 +930,7 @@ public class PKIXCertPathReviewer extends CertPathValidatorUtilities
                 }
                 catch (GeneralSecurityException ex)
                 {
+                    chainVerified = false;
                     ErrorBundle msg = new ErrorBundle(RESOURCE_NAME,"CertPathReviewer.signatureNotVerified",
                             new Object[] {ex.getMessage(),ex,ex.getClass().getName()}); 
                     addError(msg,index);
@@ -901,6 +938,7 @@ public class PKIXCertPathReviewer extends CertPathValidatorUtilities
             }
             else if (isSelfIssued(cert))
             {
+                chainVerified = false;
                 try
                 {
                     CertPathValidatorUtilities.verifyX509Certificate(cert, cert.getPublicKey(),
@@ -917,6 +955,7 @@ public class PKIXCertPathReviewer extends CertPathValidatorUtilities
             }
             else
             {
+                chainVerified = false;
                 ErrorBundle msg = new ErrorBundle(RESOURCE_NAME,"CertPathReviewer.NoIssuerPublicKey");
                 // if there is an authority key extension add the serial and issuer of the missing certificate
                 byte[] akiExtValue = cert.getExtensionValue(Extension.authorityKeyIdentifier.getId());
@@ -1018,6 +1057,7 @@ public class PKIXCertPathReviewer extends CertPathValidatorUtilities
                 
                 // TODO also support Netscapes revocation-url and/or OCSP instead of CRLs for revocation checking
                 // check CRLs
+                issuerChainVerified = chainVerified && noErrorsAbove(index);
                 try 
                 {
                     checkRevocation(pkixParams, cert, validDate, sign, workingPublicKey, crlDistPointUrls, ocspUrls, index);
@@ -1104,6 +1144,7 @@ public class PKIXCertPathReviewer extends CertPathValidatorUtilities
             }
             catch (CertPathValidatorException ex)
             {
+                chainVerified = false;
                 ErrorBundle msg = new ErrorBundle(RESOURCE_NAME,"CertPathReviewer.pubKeyError");
                 addError(msg,index);
                 workingAlgId = null;
@@ -1113,6 +1154,32 @@ public class PKIXCertPathReviewer extends CertPathValidatorUtilities
 
         trustAnchor = trust;
         subjectPublicKey = workingPublicKey;
+    }
+
+    /**
+     * True when no error has been recorded against the trust anchor or against any certificate
+     * above the one at index, so that a CRL distribution point fetch for it stands on an issuer
+     * chain that passed every check made so far - the CA, key usage, issuer name, validity and
+     * revocation checks as well as the signatures the chainVerified flag in checkSignatures
+     * tracks. An end entity certificate from a trusted CA, or a revoked or expired intermediate,
+     * otherwise serves as the issuer of a certificate whose distribution points are fetched.
+     */
+    private boolean noErrorsAbove(int index)
+    {
+        if (!errors[0].isEmpty())
+        {
+            return false;
+        }
+
+        for (int i = index + 2; i < errors.length; i++)
+        {
+            if (!errors[i].isEmpty())
+            {
+                return false;
+            }
+        }
+
+        return true;
     }
 
     private void checkPolicy()
@@ -2205,8 +2272,27 @@ public class PKIXCertPathReviewer extends CertPathValidatorUtilities
         }
 
         // if no valid crl was found in the CertStores try to get one from a
-        // crl distribution point
-        if (!validCrlFound)
+        // crl distribution point - only when CRLDP fetching is enabled and the issuer chain verified
+        boolean fetchOnline = false;
+        if (!validCrlFound && !crlDistPointUrls.isEmpty())
+        {
+            if (!Properties.isOverrideSet(Properties.X509_ENABLE_CRLDP))
+            {
+                ErrorBundle msg = new ErrorBundle(RESOURCE_NAME, "CertPathReviewer.crlDistPtFetchDisabled");
+                addNotification(msg, index);
+            }
+            else if (!issuerChainVerified)
+            {
+                ErrorBundle msg = new ErrorBundle(RESOURCE_NAME, "CertPathReviewer.crlDistPtFetchUntrusted");
+                addNotification(msg, index);
+            }
+            else
+            {
+                fetchOnline = true;
+            }
+        }
+
+        if (fetchOnline)
         {
             X500Principal certIssuer = cert.getIssuerX500Principal();
 
@@ -2228,6 +2314,15 @@ public class PKIXCertPathReviewer extends CertPathValidatorUtilities
                             ErrorBundle msg = new ErrorBundle(RESOURCE_NAME, "CertPathReviewer.onlineCRLWrongCA",
                                 new Object[]{ new UntrustedInput(crlIssuer.getName()), new UntrustedInput(certIssuer.getName()),
                                     new UntrustedUrlInput(location) });
+                            addNotification(msg,index);
+                            continue;
+                        }
+
+                        // the same RFC 5280 sec. 6.3.3 scope rules as the local store path: a CRL from the right issuer that does not cover this certificate's distribution point, or only some of the reasons, says nothing about it.
+                        if (!isScopedToCertificate(onlineCRL, distPoints, cert))
+                        {
+                            ErrorBundle msg = new ErrorBundle(RESOURCE_NAME, "CertPathReviewer.onlineCRLOutOfScope",
+                                new Object[]{ new UntrustedUrlInput(location) });
                             addNotification(msg,index);
                             continue;
                         }
@@ -2315,16 +2410,16 @@ public class PKIXCertPathReviewer extends CertPathValidatorUtilities
                         // out-of-range or out-of-int value falls through to the crlReasons[7] "unknown"
                         // below rather than throwing AIOOBE / ArithmeticException from intValueExact().
                         BigInteger rc = reasonCode.getValue();
-                        if (rc.signum() >= 0 && rc.compareTo(BigInteger.valueOf(crlReasons.length)) < 0)
+                        if (rc.signum() >= 0 && rc.compareTo(BigInteger.valueOf(CertStatus.crlReasons.length)) < 0)
                         {
-                            reason = crlReasons[rc.intValue()];
+                            reason = CertStatus.crlReasons[rc.intValue()];
                         }
                     }
                 }
 
                 if (reason == null)
                 {
-                    reason = crlReasons[7]; // unknown
+                    reason = CertStatus.crlReasons[7]; // unknown
                 }
 
                 // i18n reason
@@ -2610,8 +2705,9 @@ public class PKIXCertPathReviewer extends CertPathValidatorUtilities
             DistributionPoint[] distPoints = crlDistPoints.getDistributionPoints();
             for (int i = 0; i < distPoints.length; i++)
             {
+                // RFC 5280 sec. 4.2.1.13 allows a distribution point carrying only cRLIssuer
                 DistributionPointName dp_name = distPoints[i].getDistributionPoint();
-                if (dp_name.getType() == DistributionPointName.FULL_NAME)
+                if (dp_name != null && dp_name.getType() == DistributionPointName.FULL_NAME)
                 {
                     GeneralName[] generalNames = GeneralNames.getInstance(dp_name.getName()).getNames();
                     for (int j = 0; j < generalNames.length; j++)
@@ -2686,22 +2782,40 @@ public class PKIXCertPathReviewer extends CertPathValidatorUtilities
             {
                 URLConnection conn = url.openConnection();
                 conn.setUseCaches(false);
-                // NOTE: URLConnection.setConnectTimeout and setReadTimeout are Java 5, and this
-                // class is still compiled by the jdk1.4 build, so no timeout can be set here.
+                URLConnectionTimeouts.set(conn);
                 conn.setDoInput(true);
                 conn.connect();
 
-                if (conn instanceof HttpURLConnection)
+                try
                 {
-                    HttpURLConnection httpConn = (HttpURLConnection)conn;
-                    if (httpConn.getResponseCode() != HttpURLConnection.HTTP_OK)
+                    if (conn instanceof HttpURLConnection)
                     {
-                        throw new Exception(httpConn.getResponseMessage());
+                        HttpURLConnection httpConn = (HttpURLConnection)conn;
+                        if (httpConn.getResponseCode() != HttpURLConnection.HTTP_OK)
+                        {
+                            throw new Exception(httpConn.getResponseMessage());
+                        }
+                    }
+
+                    CertificateFactory cf = CertificateFactory.getInstance("X.509","BC");
+                    InputStream crlIn = conn.getInputStream();
+                    try
+                    {
+                        result = (X509CRL) cf.generateCRL(crlIn);
+                    }
+                    finally
+                    {
+                        crlIn.close();
                     }
                 }
-
-                CertificateFactory cf = CertificateFactory.getInstance("X.509","BC");
-                result = (X509CRL) cf.generateCRL(conn.getInputStream());
+                finally
+                {
+                    // the socket is held until the connection is disconnected, whichever way the fetch ended
+                    if (conn instanceof HttpURLConnection)
+                    {
+                        ((HttpURLConnection)conn).disconnect();
+                    }
+                }
             }
         }
         catch (Exception e)

@@ -17,9 +17,19 @@ import org.bouncycastle.crypto.params.SLHDSAParameters;
 import org.bouncycastle.crypto.params.SLHDSAPrivateKeyParameters;
 import org.bouncycastle.crypto.params.SLHDSAPublicKeyParameters;
 import org.bouncycastle.jcajce.spec.SLHDSAParameterSpec;
+import org.bouncycastle.jcajce.util.BCJcaJceHelper;
+import org.bouncycastle.util.Exceptions;
 import org.bouncycastle.jcajce.util.SpecUtil;
 import org.bouncycastle.util.Strings;
 
+/**
+ * SLH-DSA (FIPS 205) key pair generation. A generator obtained as "SLH-DSA" and not initialised
+ * produces SLH-DSA-SHA2-128F keys ("HASH-SLH-DSA" SLH-DSA-SHA2-128F-WITH-SHA256). An initialisation
+ * that gives no SecureRandom, including this default and a generator obtained under a parameter set
+ * name, draws the key from the
+ * default SecureRandom set on CryptoServicesRegistrar, if one has been set, and otherwise from the provider's
+ * 256 bit DEFAULT DRBG.
+ */
 public class SLHDSAKeyPairGeneratorSpi
     extends java.security.KeyPairGenerator
 {
@@ -59,7 +69,6 @@ public class SLHDSAKeyPairGeneratorSpi
     SLHDSAKeyGenerationParameters param;
     SLHDSAKeyPairGenerator engine = new SLHDSAKeyPairGenerator();
 
-    SecureRandom random = CryptoServicesRegistrar.getSecureRandom();
     boolean initialised = false;
     private SLHDSAParameters slhdsaParameters;
 
@@ -73,11 +82,6 @@ public class SLHDSAKeyPairGeneratorSpi
         super(Strings.toUpperCase(paramSpec.getName()));
 
         this.slhdsaParameters = (SLHDSAParameters)parameters.get(paramSpec.getName());
-
-        param = new SLHDSAKeyGenerationParameters(random, slhdsaParameters);
-
-        engine.init(param);
-        initialised = true;
     }
 
     public void initialize(
@@ -86,6 +90,13 @@ public class SLHDSAKeyPairGeneratorSpi
     {
         // what the JCA specifies here; it extends IllegalArgumentException, so catches still match
         throw new InvalidParameterException("use AlgorithmParameterSpec");
+    }
+
+    public void initialize(
+        AlgorithmParameterSpec params)
+        throws InvalidAlgorithmParameterException
+    {
+        initialize(params, createDefaultRandom());
     }
 
     public void initialize(
@@ -123,17 +134,32 @@ public class SLHDSAKeyPairGeneratorSpi
     {
         if (!initialised)
         {
-            if (this.getAlgorithm().startsWith("HASH"))
+            if (slhdsaParameters != null)
             {
-                param = new SLHDSAKeyGenerationParameters(random, SLHDSAParameters.sha2_128f_with_sha256);
+                // locked to a parameter set: set up on first use, so a generator given its own SecureRandom never builds a DRBG
+                param = new SLHDSAKeyGenerationParameters(createDefaultRandom(), slhdsaParameters);
+                engine.init(param);
+                initialised = true;
             }
             else
             {
-                param = new SLHDSAKeyGenerationParameters(random, SLHDSAParameters.sha2_128f);
+                // drawn from the DEFAULT DRBG, as initialize() without a SecureRandom does
+                try
+                {
+                    if (this.getAlgorithm().startsWith("HASH"))
+                    {
+                        initialize(SLHDSAParameterSpec.slh_dsa_sha2_128f_with_sha256);
+                    }
+                    else
+                    {
+                        initialize(SLHDSAParameterSpec.slh_dsa_sha2_128f);
+                    }
+                }
+                catch (InvalidAlgorithmParameterException e)
+                {
+                    throw Exceptions.illegalStateException("unable to apply the default parameter set", e);
+                }
             }
-
-            engine.init(param);
-            initialised = true;
         }
 
         AsymmetricCipherKeyPair pair = engine.generateKeyPair();
@@ -141,6 +167,24 @@ public class SLHDSAKeyPairGeneratorSpi
         SLHDSAPrivateKeyParameters priv = (SLHDSAPrivateKeyParameters)pair.getPrivate();
 
         return new KeyPair(new BCSLHDSAPublicKey(pub), new BCSLHDSAPrivateKey(priv));
+    }
+
+    // used wherever the caller supplies no SecureRandom: one set on CryptoServicesRegistrar, otherwise the provider's 256 bit DEFAULT DRBG
+    private static SecureRandom createDefaultRandom()
+    {
+        if (CryptoServicesRegistrar.isSecureRandomSpecified())
+        {
+            return CryptoServicesRegistrar.getSecureRandom();
+        }
+
+        try
+        {
+            return new BCJcaJceHelper().createSecureRandom("DEFAULT");
+        }
+        catch (NoSuchAlgorithmException e)
+        {
+            throw Exceptions.illegalStateException("unable to find DEFAULT DRBG", e);
+        }
     }
 
     private static String getNameFromParams(AlgorithmParameterSpec paramSpec)

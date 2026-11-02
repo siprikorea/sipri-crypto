@@ -4,12 +4,19 @@ import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.OutputStream;
 import java.util.Collection;
+import java.util.Date;
+import java.util.HashSet;
+import java.util.Iterator;
 import java.util.NoSuchElementException;
+import java.util.Set;
 
 import org.bouncycastle.asn1.ASN1Encoding;
+import org.bouncycastle.asn1.cmp.PKIFailureInfo;
 import org.bouncycastle.asn1.cms.Attribute;
 import org.bouncycastle.asn1.cms.AttributeTable;
+import org.bouncycastle.asn1.cms.CMSAttributes;
 import org.bouncycastle.asn1.cms.ContentInfo;
+import org.bouncycastle.asn1.cms.Time;
 import org.bouncycastle.asn1.ess.ESSCertID;
 import org.bouncycastle.asn1.ess.ESSCertIDv2;
 import org.bouncycastle.asn1.ess.SigningCertificate;
@@ -29,9 +36,11 @@ import org.bouncycastle.cms.CMSSignedData;
 import org.bouncycastle.cms.SignerId;
 import org.bouncycastle.cms.SignerInformation;
 import org.bouncycastle.cms.SignerInformationVerifier;
+import org.bouncycastle.operator.DefaultDigestAlgorithmIdentifierFinder;
 import org.bouncycastle.operator.DigestCalculator;
 import org.bouncycastle.operator.OperatorCreationException;
 import org.bouncycastle.util.Arrays;
+import org.bouncycastle.util.Properties;
 import org.bouncycastle.util.Store;
 
 /**
@@ -39,9 +48,17 @@ import org.bouncycastle.util.Store;
  * content type id-ct-TSTInfo, signed by the TSA. Provides access to the embedded
  * {@link TimeStampTokenInfo} and the means to verify the token against the signing certificate
  * (see {@link #validate(SignerInformationVerifier)}).
+ * <p>
+ * Construction checks the token's structure: the content type is id-ct-TSTInfo, there is exactly one
+ * signer, a signing-certificate signed attribute is present, and a signing-time signed attribute, if
+ * present, agrees with the TSTInfo genTime to within the token's accuracy (plus a one minute allowance).
+ * The last check can be disabled with {@link Properties#TSP_ALLOW_INCONSISTENT_SIGNING_TIME}.
  */
 public class TimeStampToken
 {
+    private static final long SIGNING_TIME_ALLOWANCE = 60 * 1000L;
+    private static final DefaultDigestAlgorithmIdentifierFinder DIGEST_FINDER = new DefaultDigestAlgorithmIdentifierFinder();
+
     CMSSignedData tsToken;
 
     SignerInformation tsaSignerInfo;
@@ -110,6 +127,8 @@ public class TimeStampToken
                 throw new TSPValidationException("no signing certificate attribute found, time stamp invalid.");
             }
 
+            checkSigningTime(signedAttr);
+
             Attribute attr = signedAttr.get(PKCSObjectIdentifiers.id_aa_signingCertificate);
 
             if (attr != null)
@@ -167,6 +186,43 @@ public class TimeStampToken
         catch (NoSuchElementException e)
         {
             throw new TSPException("malformed timestamp token: " + e, e);
+        }
+    }
+
+    /**
+     * A signing-time signed attribute (RFC 5652 sec. 11.3) on a time-stamp token is, like genTime, the TSA's
+     * statement of when it produced the token; a token in which the two disagree was not produced as RFC 3161
+     * describes and is rejected unless {@link Properties#TSP_ALLOW_INCONSISTENT_SIGNING_TIME} is set.
+     */
+    private void checkSigningTime(AttributeTable signedAttr)
+        throws TSPValidationException
+    {
+        Attribute attr = signedAttr.get(CMSAttributes.signingTime);
+
+        if (attr == null || Properties.isOverrideSet(Properties.TSP_ALLOW_INCONSISTENT_SIGNING_TIME))
+        {
+            return;
+        }
+
+        if (attr.getAttrValues().size() != 1)
+        {
+            throw new TSPValidationException("signing-time attribute MUST contain exactly one value.");
+        }
+
+        Date signingTime = Time.getInstance(attr.getAttrValues().getObjectAt(0)).getDate();
+        Date genTime = tstInfo.getGenTime();
+
+        long allowance = SIGNING_TIME_ALLOWANCE;
+        GenTimeAccuracy accuracy = tstInfo.getGenTimeAccuracy();
+        if (accuracy != null)
+        {
+            allowance += accuracy.getSeconds() * 1000L + accuracy.getMillis() + 1;
+        }
+
+        long difference = signingTime.getTime() - genTime.getTime();
+        if (difference > allowance || difference < -allowance)
+        {
+            throw new TSPValidationException("signing-time attribute does not agree with genTime.");
         }
     }
 
@@ -237,11 +293,16 @@ public class TimeStampToken
      * timestamp was created.
      * </p>
      * <p>
+     * The message imprint must also use a hash algorithm in {@link TSPAlgorithms#ALLOWED}, or in the list
+     * given by {@link Properties#TSP_ALLOWED_IMPRINT_ALGORITHMS} if it is set.
+     * </p>
+     * <p>
      * A successful call to validate means all the above are true.
      * </p>
      *
      * @param sigVerifier the content verifier create the objects required to verify the CMS object in the timestamp.
-     * @throws TSPException if an exception occurs in processing the token.
+     * @throws TSPException if an exception occurs in processing the token, or the imprint algorithm property
+     * names an unknown digest.
      * @throws TSPValidationException if the certificate or signature fail to be valid.
      * @throws IllegalArgumentException if the sigVerifierProvider has no associated certificate.
      */
@@ -249,6 +310,55 @@ public class TimeStampToken
         SignerInformationVerifier sigVerifier)
         throws TSPException, TSPValidationException
     {
+        validate(sigVerifier, getDefaultImprintAlgorithms());
+    }
+
+    private static Set getDefaultImprintAlgorithms()
+        throws TSPException
+    {
+        Set names = Properties.asKeySet(Properties.TSP_ALLOWED_IMPRINT_ALGORITHMS);
+        Set algorithms = new HashSet();
+
+        for (Iterator it = names.iterator(); it.hasNext();)
+        {
+            String name = (String)it.next();
+            if (name.length() != 0)
+            {
+                try
+                {
+                    algorithms.add(DIGEST_FINDER.find(name).getAlgorithm());
+                }
+                catch (IllegalArgumentException e)
+                {
+                    throw new TSPException("unknown digest algorithm in " + Properties.TSP_ALLOWED_IMPRINT_ALGORITHMS + ": " + name, e);
+                }
+            }
+        }
+
+        return algorithms.isEmpty() ? TSPAlgorithms.ALLOWED : algorithms;
+    }
+
+    /**
+     * Validate the time stamp token, as for {@link #validate(SignerInformationVerifier)}, but accepting a
+     * message imprint calculated with any of the passed in hash algorithms.
+     *
+     * @param sigVerifier the content verifier create the objects required to verify the CMS object in the timestamp.
+     * @param allowedImprintAlgorithms the OIDs of the hash algorithms acceptable for the message imprint.
+     * @throws TSPException if an exception occurs in processing the token.
+     * @throws TSPValidationException if the imprint algorithm is not allowed (failure code badAlg), or the
+     * certificate or signature fail to be valid.
+     * @throws IllegalArgumentException if the sigVerifierProvider has no associated certificate.
+     */
+    public void validate(
+        SignerInformationVerifier sigVerifier,
+        Set allowedImprintAlgorithms)
+        throws TSPException, TSPValidationException
+    {
+        if (!allowedImprintAlgorithms.contains(tstInfo.getMessageImprintAlgOID()))
+        {
+            throw new TSPValidationException("message imprint algorithm not allowed.", PKIFailureInfo.badAlg);
+        }
+
         if (!sigVerifier.hasAssociatedCertificate())
         {
             throw new IllegalArgumentException("verifier provider needs an associated certificate");

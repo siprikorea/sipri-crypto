@@ -46,7 +46,7 @@ public class Attribute
      * </ul>
      *
      * @param o the object we want converted.
-     * @exception IllegalArgumentException if the object cannot be converted.
+     * @throws IllegalArgumentException if the object cannot be converted.
      */
     public static Attribute getInstance(
         Object o)
@@ -67,7 +67,7 @@ public class Attribute
     private Attribute(
         ASN1Sequence seq)
     {
-        if (seq.size() < 2)
+        if (seq.size() != 2)
         {
             throw new IllegalArgumentException("expected sequence size of 2");
         }

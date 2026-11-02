@@ -6,11 +6,13 @@ import java.io.OutputStream;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Collections;
+import java.util.Comparator;
 import java.util.HashSet;
 import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.TreeSet;
 
 import org.bouncycastle.asn1.ASN1Encodable;
 import org.bouncycastle.asn1.ASN1EncodableVector;
@@ -20,7 +22,6 @@ import org.bouncycastle.asn1.ASN1Integer;
 import org.bouncycastle.asn1.ASN1ObjectIdentifier;
 import org.bouncycastle.asn1.ASN1OctetString;
 import org.bouncycastle.asn1.ASN1Primitive;
-import org.bouncycastle.asn1.ASN1SequenceParser;
 import org.bouncycastle.asn1.ASN1Set;
 import org.bouncycastle.asn1.ASN1SetParser;
 import org.bouncycastle.asn1.ASN1TaggedObject;
@@ -31,6 +32,7 @@ import org.bouncycastle.asn1.DERNull;
 import org.bouncycastle.asn1.DERSet;
 import org.bouncycastle.asn1.DERTaggedObject;
 import org.bouncycastle.asn1.DLSet;
+import org.bouncycastle.asn1.InMemoryRepresentable;
 import org.bouncycastle.asn1.bsi.BSIObjectIdentifiers;
 import org.bouncycastle.asn1.cms.AttributeTable;
 import org.bouncycastle.asn1.cms.CMSObjectIdentifiers;
@@ -60,6 +62,8 @@ import org.bouncycastle.operator.GenericKey;
 import org.bouncycastle.operator.OidCatalogue;
 import org.bouncycastle.operator.OutputAEADEncryptor;
 import org.bouncycastle.operator.OutputEncryptor;
+import org.bouncycastle.util.Arrays;
+import org.bouncycastle.util.Exceptions;
 import org.bouncycastle.util.Store;
 import org.bouncycastle.util.io.Streams;
 import org.bouncycastle.util.io.TeeInputStream;
@@ -67,6 +71,40 @@ import org.bouncycastle.util.io.TeeOutputStream;
 
 class CMSUtils
 {
+    /**
+     * Orders AlgorithmIdentifiers by their DER encodings, which coincide exactly when
+     * {@link AlgorithmIdentifier#equals(Object)} holds.
+     */
+    static final Comparator ALGORITHM_IDENTIFIER_ORDER = new Comparator()
+    {
+        public int compare(Object a, Object b)
+        {
+            return Arrays.compareUnsigned(derEncoding(a), derEncoding(b));
+        }
+    };
+
+    private static byte[] derEncoding(Object algId)
+    {
+        try
+        {
+            return ((AlgorithmIdentifier)algId).getEncoded(ASN1Encoding.DER);
+        }
+        catch (IOException e)
+        {
+            throw new IllegalStateException("unable to encode AlgorithmIdentifier: " + e.getMessage());
+        }
+    }
+
+    /**
+     * A set of AlgorithmIdentifiers ordered on their encodings rather than hashed, for identifiers read
+     * from a message: the hash code of an ASN.1 object is cheap to collide, so a hash set of them can be
+     * driven quadratic by the sender.
+     */
+    static Set<AlgorithmIdentifier> algorithmIdentifierSet()
+    {
+        return new TreeSet<AlgorithmIdentifier>(ALGORITHM_IDENTIFIER_ORDER);
+    }
+
     private static final Set desAlgs = new HashSet();
     private static final Set mqvAlgs = new HashSet();
     private static final Set ecAlgs = new HashSet();
@@ -782,13 +820,41 @@ class CMSUtils
 
             while ((o = set.readObject()) != null)
             {
-                ASN1SequenceParser seq = (ASN1SequenceParser)o;
-
-                v.add(seq.toASN1Primitive());
+                v.add(getLoadedObject(o));
             }
-            return new AttributeTable(new DERSet(v));
+            return getAttributeTable(new DERSet(v));
         }
         return null;
+    }
+
+    /**
+     * Build an attribute table, reporting a set element that is not an Attribute as an IOException.
+     */
+    static AttributeTable getAttributeTable(ASN1Set set)
+        throws IOException
+    {
+        try
+        {
+            return new AttributeTable(set);
+        }
+        catch (IllegalArgumentException e)
+        {
+            throw Exceptions.ioException("malformed attribute: " + e.getMessage(), e);
+        }
+    }
+
+    /**
+     * Load an object returned by a stream parser through getLoadedObject(), so a parse failure is reported
+     * as the IOException it declares rather than as the unchecked exception toASN1Primitive() must use.
+     */
+    static ASN1Primitive getLoadedObject(ASN1Encodable obj)
+        throws IOException
+    {
+        if (obj instanceof InMemoryRepresentable)
+        {
+            return ((InMemoryRepresentable)obj).getLoadedObject();
+        }
+        return obj.toASN1Primitive();
     }
 
     static ASN1Set getAttrDLSet(CMSAttributeTableGenerator gen)

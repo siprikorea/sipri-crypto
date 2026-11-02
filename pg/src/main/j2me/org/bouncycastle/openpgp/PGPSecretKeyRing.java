@@ -279,7 +279,7 @@ public class PGPSecretKeyRing
      */
     public Iterator getExtraPublicKeys()
     {
-        return extraPubKeys.iterator();
+        return Collections.unmodifiableList(extraPubKeys).iterator();
     }
 
     /**
@@ -353,7 +353,16 @@ public class PGPSecretKeyRing
             newList.add(PGPSecretKey.replacePublicKey(sk, pk));
         }
 
-        return new PGPSecretKeyRing(newList);
+        List extras = new ArrayList(secretRing.extraPubKeys.size());
+        for (Iterator it = secretRing.extraPubKeys.iterator(); it.hasNext();)
+        {
+            PGPPublicKey extra = (PGPPublicKey)it.next();
+            PGPPublicKey pk = publicRing.getPublicKey(extra.getKeyID());
+
+            extras.add(pk != null ? pk : extra);
+        }
+
+        return new PGPSecretKeyRing(newList, extras);
     }
 
     /**

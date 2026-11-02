@@ -148,7 +148,7 @@ public class RomulusEngine
             int adlen = aadOperator.getLen();
             int mlen = dataOperator.getLen() - (forEncryption ? 0 : MAC_SIZE);
             byte[] m = ((StreamDataOperator)dataOperator).getBytes();
-            int xlen, mOff = 0, mauth = outOff;
+            int xlen, mOff = 0;
             xlen = mlen;
             if ((adlen & 31) == 0 && adlen != 0)
             {
@@ -198,7 +198,7 @@ public class RomulusEngine
                 }
                 block_cipher(mac_s, k, npub, 0, mac_CNT, w);
                 // Tag generation
-                g8A(mac_s, mac, 0);
+                g8A(mac_s, mac, 0, MAC_SIZE);
                 mOff -= mlen;
             }
             else
@@ -207,19 +207,22 @@ public class RomulusEngine
             }
             reset_lfsr_gf56(CNT);
             System.arraycopy(mac, 0, s, 0, AD_BLK_LEN_HALF);
+            // decryption works in a private buffer: the plaintext is released only once the tag verifies
+            byte[] dst = forEncryption ? output : new byte[mlen];
+            int dstOff = forEncryption ? outOff : 0, mauth = dstOff;
             if (mlen > 0)
             {
                 block_cipher(s, k, npub, 0, CNT, (byte)36);
                 while (mlen > AD_BLK_LEN_HALF)
                 {
                     mlen = mlen - AD_BLK_LEN_HALF;
-                    rho(m, mOff, output, outOff, s, AD_BLK_LEN_HALF);
-                    outOff += AD_BLK_LEN_HALF;
+                    rho(m, mOff, dst, dstOff, s, AD_BLK_LEN_HALF);
+                    dstOff += AD_BLK_LEN_HALF;
                     mOff += AD_BLK_LEN_HALF;
                     lfsr_gf56(CNT);
                     block_cipher(s, k, npub, 0, CNT, (byte)36);
                 }
-                rho(m, mOff, output, outOff, s, mlen);
+                rho(m, mOff, dst, dstOff, s, mlen);
             }
             if (!forEncryption)
             {
@@ -228,7 +231,7 @@ public class RomulusEngine
                     byte[] Temp = new byte[16];
                     int len8 = Math.min(xlen, AD_BLK_LEN_HALF);
                     xlen -= len8;
-                    pad(output, mauth, Temp, AD_BLK_LEN_HALF, len8);
+                    pad(dst, mauth, Temp, AD_BLK_LEN_HALF, len8);
                     block_cipher(mac_s, k, Temp, 0, mac_CNT, (byte)44);
                     lfsr_gf56(mac_CNT);
                     mauth += len8;
@@ -240,14 +243,19 @@ public class RomulusEngine
                 while (xlen > 0)
                 {
                     offset = mauth;
-                    xlen = ad_encryption(output, mauth, mac_s, k, xlen, mac_CNT);
+                    xlen = ad_encryption(dst, mauth, mac_s, k, xlen, mac_CNT);
                     mauth = offset;
                 }
                 block_cipher(mac_s, k, npub, 0, mac_CNT, w);
                 // Tag generation
-                g8A(mac_s, mac, 0);
+                g8A(mac_s, mac, 0, MAC_SIZE);
                 System.arraycopy(m, dataOperator.getLen() - MAC_SIZE, m_buf, 0, MAC_SIZE);
                 m_bufPos = 0;
+                if (Arrays.constantTimeAreEqual(MAC_SIZE, mac, 0, m_buf, 0))
+                {
+                    System.arraycopy(dst, 0, output, outOff, dst.length);
+                }
+                Arrays.clear(dst);
             }
         }
 
@@ -365,7 +373,7 @@ public class RomulusEngine
                 lfsr_gf56(CNT);
                 block_cipher(s, k, npub, 0, CNT, m_bufPos == AD_BLK_LEN_HALF ? (byte)0x14 : (byte)0x15);
             }
-            g8A(s, mac, 0);
+            g8A(s, mac, 0, MAC_SIZE);
         }
 
         @Override
@@ -420,7 +428,7 @@ public class RomulusEngine
         @Override
         public void processBufferEncrypt(byte[] input, int inOff, byte[] output, int outOff)
         {
-            g8A(s, output, outOff);
+            g8A(s, output, outOff, AD_BLK_LEN_HALF);
             for (int i = 0; i < AD_BLK_LEN_HALF; i++)
             {
                 s[i] ^= input[i + inOff];
@@ -433,7 +441,7 @@ public class RomulusEngine
         @Override
         public void processBufferDecrypt(byte[] input, int inOff, byte[] output, int outOff)
         {
-            g8A(s, output, outOff);
+            g8A(s, output, outOff, AD_BLK_LEN_HALF);
             for (int i = 0; i < AD_BLK_LEN_HALF; i++)
             {
                 output[i + outOff] ^= input[i + inOff];
@@ -727,10 +735,9 @@ public class RomulusEngine
         System.arraycopy(m, mOff, mp, 0, len8);
     }
 
-    // G(S): generates the key stream from the internal state by multiplying the state S by the constant matrix G
-    void g8A(byte[] s, byte[] c, int cOff)
+    // G(S): writes only the first len bytes of the key stream, never past what the caller will consume
+    void g8A(byte[] s, byte[] c, int cOff, int len)
     {
-        int len = Math.min(c.length - cOff, 16);
         for (int i = 0; i < len; i++)
         {
             c[i + cOff] = (byte)(((s[i] & 0xFF) >>> 1) ^ (s[i] & 0x80) ^ ((s[i] & 0x01) << 7));
@@ -743,7 +750,7 @@ public class RomulusEngine
     {
         byte[] mp = new byte[16];
         pad(m, mOff, mp, AD_BLK_LEN_HALF, len8);
-        g8A(s, c, cOff);
+        g8A(s, c, cOff, len8);
         if (forEncryption)
         {
             for (int i = 0; i < AD_BLK_LEN_HALF; i++)
@@ -753,10 +760,6 @@ public class RomulusEngine
                 {
                     c[i + cOff] ^= mp[i];
                 }
-                else
-                {
-                    c[i + cOff] = 0;
-                }
             }
         }
         else
@@ -764,7 +767,7 @@ public class RomulusEngine
             for (int i = 0; i < AD_BLK_LEN_HALF; i++)
             {
                 s[i] ^= mp[i];
-                if (i < len8 && i + cOff < c.length)
+                if (i < len8)
                 {
                     s[i] ^= c[i + cOff];
                     c[i + cOff] ^= mp[i];

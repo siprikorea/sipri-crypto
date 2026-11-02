@@ -139,9 +139,15 @@ public class PKCS12KeyStoreSpi
     private ASN1ObjectIdentifier keyAlgorithm;
     private ASN1ObjectIdentifier certAlgorithm;
 
+    // what a store writes its MAC with until a file it loads says otherwise
+    private static final AlgorithmIdentifier DEFAULT_MAC_ALGORITHM = new AlgorithmIdentifier(id_SHA1, DERNull.INSTANCE);
+    private static final int DEFAULT_MAC_SALT_LENGTH = 20;
+
+    private AlgorithmIdentifier macAlgorithm = DEFAULT_MAC_ALGORITHM;
     // The MAC iteration count: taken from a loaded file so that storing it again preserves it,
     // and -1 until then, meaning doStore should use the store-time default.
     private int itCount = -1;
+    private int saltLength = DEFAULT_MAC_SALT_LENGTH;
 
     private class CertId
     {
@@ -776,13 +782,62 @@ public class PKCS12KeyStoreSpi
         return cipher;
     }
 
+    /**
+     * Load the store from a stream, or make it empty when the stream is null, as KeyStore.load() specifies.
+     * A load that fails leaves the store as it was before the call.
+     */
     public void engineLoad(
         InputStream stream,
         char[] password)
         throws IOException
     {
-        if (stream == null)     // just initialising
+        IgnoresCaseHashtable savedKeys = keys;
+        Hashtable savedLocalIds = localIds;
+        IgnoresCaseHashtable savedCerts = certs;
+        Hashtable savedChainCerts = chainCerts;
+        Hashtable savedKeyCerts = keyCerts;
+        AlgorithmIdentifier savedMacAlgorithm = macAlgorithm;
+        int savedItCount = itCount;
+        int savedSaltLength = saltLength;
+
+        boolean loaded = false;
+        try
         {
+            doLoad(stream, password);
+            loaded = true;
+        }
+        finally
+        {
+            if (!loaded)
+            {
+                keys = savedKeys;
+                localIds = savedLocalIds;
+                certs = savedCerts;
+                chainCerts = savedChainCerts;
+                keyCerts = savedKeyCerts;
+                macAlgorithm = savedMacAlgorithm;
+                itCount = savedItCount;
+                saltLength = savedSaltLength;
+            }
+        }
+    }
+
+    private void doLoad(
+        InputStream stream,
+        char[] password)
+        throws IOException
+    {
+        if (stream == null)     // an empty store
+        {
+            keys = new IgnoresCaseHashtable();
+            localIds = new Hashtable();
+            certs = new IgnoresCaseHashtable();
+            chainCerts = new Hashtable();
+            keyCerts = new Hashtable();
+            macAlgorithm = DEFAULT_MAC_ALGORITHM;
+            itCount = -1;
+            saltLength = DEFAULT_MAC_SALT_LENGTH;
+
             return;
         }
 
@@ -827,13 +882,13 @@ public class PKCS12KeyStoreSpi
             DigestInfo dInfo = mData.getMac();
             AlgorithmIdentifier algId = dInfo.getAlgorithmId();
             byte[] salt = mData.getSalt();
-            itCount = PKCS12Util.validateIterationCount(mData.getIterationCount());
+            int fileItCount = PKCS12Util.validateIterationCount(mData.getIterationCount());
 
             byte[] data = PKCS12Util.getContentOctets(info);
 
             try
             {
-                byte[] res = calculatePbeMac(algId.getAlgorithm(), salt, itCount, password, false, data);
+                byte[] res = calculatePbeMac(algId.getAlgorithm(), salt, fileItCount, password, false, data);
                 byte[] dig = dInfo.getDigest();
 
                 if (!Arrays.constantTimeAreEqual(res, dig))
@@ -844,7 +899,7 @@ public class PKCS12KeyStoreSpi
                     }
 
                     // Try with incorrect zero length password
-                    res = calculatePbeMac(algId.getAlgorithm(), salt, itCount, password, true, data);
+                    res = calculatePbeMac(algId.getAlgorithm(), salt, fileItCount, password, true, data);
 
                     if (!Arrays.constantTimeAreEqual(res, dig))
                     {
@@ -853,6 +908,13 @@ public class PKCS12KeyStoreSpi
 
                     wrongPKCS12Zero = true;
                 }
+
+                // the file has verified: a write may now keep the MAC algorithm, count and salt
+                // length it arrived with. The salt bytes are not inherited - they are generated per
+                // write - and nothing is latched from a file that failed the check above.
+                macAlgorithm = algId;
+                itCount = fileItCount;
+                saltLength = PKCS12Util.getMacSaltLength(salt.length);
             }
             catch (IOException e)
             {
@@ -862,6 +924,14 @@ public class PKCS12KeyStoreSpi
             {
                 throw new IOException("error constructing MAC: " + e.toString());
             }
+        }
+        else
+        {
+            // a file with no MAC has no shape for a write to inherit, so put the defaults back
+            // rather than let one loaded earlier into this store carry over to it
+            macAlgorithm = DEFAULT_MAC_ALGORITHM;
+            itCount = -1;
+            saltLength = DEFAULT_MAC_SALT_LENGTH;
         }
 
         keys = new IgnoresCaseHashtable();
@@ -1591,7 +1661,7 @@ public class PKCS12KeyStoreSpi
         //
         // create the mac
         //
-        byte[] mSalt = new byte[20];
+        byte[] mSalt = new byte[saltLength];
 
         random.nextBytes(mSalt);
 
@@ -1601,10 +1671,9 @@ public class PKCS12KeyStoreSpi
 
         try
         {
-            byte[] res = calculatePbeMac(id_SHA1, mSalt, macItCount, password, false, data);
+            byte[] res = calculatePbeMac(macAlgorithm.getAlgorithm(), mSalt, macItCount, password, false, data);
 
-            AlgorithmIdentifier algId = new AlgorithmIdentifier(id_SHA1, DERNull.INSTANCE);
-            DigestInfo dInfo = new DigestInfo(algId, res);
+            DigestInfo dInfo = new DigestInfo(macAlgorithm, res);
 
             mData = new MacData(dInfo, mSalt, macItCount);
         }

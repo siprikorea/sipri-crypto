@@ -147,6 +147,14 @@ public class Blake2bDigest
         this.t0 = digest.t0;
         this.t1 = digest.t1;
         this.f0 = digest.f0;
+        this.f1 = digest.f1;
+        this.fanout = digest.fanout;
+        this.depth = digest.depth;
+        this.leafLength = digest.leafLength;
+        this.nodeOffset = digest.nodeOffset;
+        this.nodeDepth = digest.nodeDepth;
+        this.innerHashLength = digest.innerHashLength;
+        this.isLastNode = digest.isLastNode;
         this.purpose = digest.purpose;
     }
 
@@ -187,7 +195,8 @@ public class Blake2bDigest
 
     public Blake2bDigest(byte[] key, CryptoServicePurpose purpose)
     {
-        if (key != null)
+        // an empty key is no key (RFC 7693 sec. 3.3), not a block of zeros
+        if (key != null && key.length > 0)
         {
             if (key.length > 64)
             {
@@ -254,7 +263,8 @@ public class Blake2bDigest
             System.arraycopy(personalization, 0, this.personalization, 0,
                 personalization.length);
         }
-        if (key != null)
+        // an empty key is no key (RFC 7693 sec. 3.3), not a block of zeros
+        if (key != null && key.length > 0)
         {
             if (key.length > 64)
             {
@@ -272,37 +282,57 @@ public class Blake2bDigest
         init();
     }
 
+    /**
+     * BLAKE2b with an explicit parameter block, laid out as in RFC 7693 sec. 2.5: digest length, key length, fanout,
+     * depth, leaf length, node offset, node depth, inner hash length, salt and personalization.
+     *
+     * @param key   the key, exactly as long as the key length in the parameter block, or null if the caller
+     *              absorbs the key itself (as a tree hash such as BLAKE2bp does).
+     * @param param the 64 byte parameter block.
+     */
     public Blake2bDigest(byte[] key, byte[] param)
     {
-//        if (key != null)
-//        {
-//            this.key = new byte[key.length];
-//            System.arraycopy(key, 0, this.key, 0, key.length);
-//
-//            if (key.length > 64)
-//            {
-//                throw new IllegalArgumentException(
-//                        "Keys > 64 bytes are not supported");
-//            }
-//            keyLength = key.length;
-//            System.arraycopy(key, 0, buffer, 0, key.length);
-//            bufferPos = BLOCK_LENGTH_BYTES; // zero padding
-//        }
-
         this.purpose = CryptoServicePurpose.ANY;
-        digestLength = param[0];
-        keyLength = param[1];
-        fanout = param[2];
-        depth = param[3];
+        if (param.length != 64)
+        {
+            throw new IllegalArgumentException("BLAKE2b parameter block must be 64 bytes");
+        }
+        digestLength = param[0] & 0xFF;
+        if (digestLength < 1 || digestLength > 64)
+        {
+            throw new IllegalArgumentException(
+                "Invalid digest length (required: 1 - 64)");
+        }
+        keyLength = param[1] & 0xFF;
+        if (keyLength > 64)
+        {
+            throw new IllegalArgumentException(
+                "Keys > 64 bytes are not supported");
+        }
+        fanout = param[2] & 0xFF;
+        depth = param[3] & 0xFF;
         leafLength = Pack.littleEndianToInt(param, 4);
-        nodeOffset |= Pack.littleEndianToInt(param, 8);
-        //xoflength
-        nodeDepth = param[16];
-        innerHashLength = param[17];
-//        byte[] salt = new byte[16];
-//        byte[] personalization = new byte[16];
-//        System.arraycopy(param, 16, salt, 0, 8);
-//        System.arraycopy(param, 24, personalization, 0, 8);
+        nodeOffset = Pack.littleEndianToLong(param, 8);
+        nodeDepth = param[16] & 0xFF;
+        innerHashLength = param[17] & 0xFF;
+        salt = Arrays.copyOfRange(param, 32, 48);
+        personalization = Arrays.copyOfRange(param, 48, 64);
+
+        if (key != null)
+        {
+            if (key.length != keyLength)
+            {
+                throw new IllegalArgumentException("key length does not match parameter block");
+            }
+            if (keyLength > 0)
+            {
+                this.key = Arrays.clone(key);
+                System.arraycopy(key, 0, buffer, 0, key.length);
+                bufferPos = BLOCK_LENGTH_BYTES; // zero padding
+            }
+        }
+
+        CryptoServicesRegistrar.checkConstraints(Utils.getDefaultProperties(this, digestLength * 8, purpose));
         init();
     }
 
@@ -310,7 +340,7 @@ public class Blake2bDigest
     private void init()
     {
         chainValue[0] = blake2b_IV[0]
-            ^ (digestLength | (keyLength << 8) | ((fanout << 16) | (depth << 24) | (leafLength << 32)));
+            ^ (digestLength | (keyLength << 8) | (fanout << 16) | ((long)depth << 24) | ((leafLength & 0xFFFFFFFFL) << 32));
         chainValue[1] = blake2b_IV[1] ^ nodeOffset;
         chainValue[2] = blake2b_IV[2] ^ ( nodeDepth | (innerHashLength << 8) );
 
@@ -471,7 +501,6 @@ public class Blake2bDigest
         f1 = 0L;
         t0 = 0L;
         t1 = 0L;
-        isLastNode = false;
 
         Arrays.fill(internalState, 0L);
 
@@ -525,6 +554,10 @@ public class Blake2bDigest
         internalState[posB] = Longs.rotateRight(internalState[posB] ^ internalState[posC], 63); // replaces 11 of BLAKE
     }
 
+    /**
+     * Mark this digest as computing the last node at its level of a hash tree. The setting is kept
+     * by reset() and by the copy constructor, like the other tree parameters.
+     */
     protected void setAsLastNode()
     {
         isLastNode = true;

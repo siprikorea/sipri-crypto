@@ -4,6 +4,7 @@ import java.security.SecureRandom;
 
 import org.bouncycastle.crypto.CipherParameters;
 import org.bouncycastle.crypto.CryptoException;
+import org.bouncycastle.crypto.CryptoServicesRegistrar;
 import org.bouncycastle.crypto.DataLengthException;
 import org.bouncycastle.crypto.Signer;
 import org.bouncycastle.crypto.digests.SHAKEDigest;
@@ -13,6 +14,7 @@ import org.bouncycastle.crypto.params.MLDSAPublicKeyParameters;
 import org.bouncycastle.crypto.params.ParametersWithContext;
 import org.bouncycastle.crypto.params.ParametersWithRandom;
 import org.bouncycastle.crypto.signers.mldsa.MLDSAEngine;
+import org.bouncycastle.util.Arrays;
 
 /**
  * ML-DSA (FIPS 204) signer/verifier.
@@ -109,6 +111,9 @@ public class MLDSASigner
             throw new IllegalArgumentException("\"pure\" ml-dsa must use non pre-hash parameters");
         }
 
+        CryptoServicesRegistrar.checkConstraints(Utils.getDefaultProperties("ML-DSA",
+            parameters.getClassicalSecurityStrength(), forSigning ? (CipherParameters)privKey : (CipherParameters)pubKey, forSigning));
+
         reset();
     }
 
@@ -171,18 +176,29 @@ public class MLDSASigner
         return sig;
     }
 
+    /**
+     * Compare a mu value with the mu of the message fed through update(): SHAKE256 over tr, the context
+     * and the message, which is what {@link #generateMu()} returns on the signing side for the same key,
+     * context and message. The signer is reset afterwards, as it is after any other verification.
+     *
+     * @param mu the candidate mu, 64 bytes.
+     * @return true if mu is the message's mu under this key and context, false otherwise.
+     * @throws DataLengthException if mu is not 64 bytes long.
+     */
     public boolean verifyMu(byte[] mu)
     {
         if (mu.length != MLDSAEngine.CrhBytes)
         {
+            reset();
+
             throw new DataLengthException("mu value must be " + MLDSAEngine.CrhBytes + " bytes");
         }
 
-        boolean isTrue = engine.verifyInternalMu(mu);
+        byte[] expected = engine.generateMu(msgDigest);
 
         reset();
 
-        return isTrue;
+        return Arrays.constantTimeAreEqual(expected, mu);
     }
 
     public boolean verifySignature(byte[] signature)

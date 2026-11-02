@@ -165,7 +165,6 @@ module org.bouncycastle.provider
     exports org.bouncycastle.pqc.legacy.crystals.dilithium;
     exports org.bouncycastle.pqc.crypto.falcon;
     exports org.bouncycastle.pqc.crypto.hqc;
-    exports org.bouncycastle.pqc.crypto.lms;
     exports org.bouncycastle.pqc.crypto.mayo;
     exports org.bouncycastle.pqc.crypto.newhope;
     exports org.bouncycastle.pqc.crypto.ntru;
@@ -186,7 +185,6 @@ module org.bouncycastle.provider
     exports org.bouncycastle.pqc.crypto.sqisign;
     exports org.bouncycastle.pqc.crypto.uov;
     exports org.bouncycastle.pqc.crypto.util;
-    exports org.bouncycastle.pqc.crypto.xmss;
     exports org.bouncycastle.pqc.crypto.xwing;
     exports org.bouncycastle.pqc.math.ntru;
     exports org.bouncycastle.pqc.math.ntru.parameters;

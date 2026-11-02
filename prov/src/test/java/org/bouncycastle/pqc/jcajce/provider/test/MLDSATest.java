@@ -273,6 +273,56 @@ public class MLDSATest
         }
     }
 
+    public void testPrivateKeyEmbeddedPublicKeyConsistency()
+        throws Exception
+    {
+        for (int i = 0; i != names.length; i++)
+        {
+            KeyPair kp = KeyPairGenerator.getInstance(names[i], "BC").generateKeyPair();
+            KeyFactory kFact = KeyFactory.getInstance(names[i], "BC");
+            MLDSAPrivateKey priv = (MLDSAPrivateKey)kp.getPrivate();
+            byte[] pub = SubjectPublicKeyInfo.getInstance(kp.getPublic().getEncoded()).getPublicKeyData().getOctets();
+
+            byte[] rhoFlip = Arrays.clone(pub);
+            rhoFlip[5] ^= 0x01;
+            byte[] t1Flip = Arrays.clone(pub);
+            t1Flip[t1Flip.length - 1] ^= 0x01;
+
+            byte[][] encodings = new byte[][]{ priv.getEncoded(), priv.getPrivateKey(true).getEncoded(),
+                priv.getPrivateKey(false).getEncoded() };
+            for (int j = 0; j != encodings.length; j++)
+            {
+                PrivateKeyInfo info = PrivateKeyInfo.getInstance(encodings[j]);
+
+                byte[] good = new PrivateKeyInfo(info.getPrivateKeyAlgorithm(), info.parsePrivateKey(), null, pub).getEncoded();
+                PrivateKey key = kFact.generatePrivate(new PKCS8EncodedKeySpec(good));
+                assertEquals(kp.getPublic(), ((MLDSAPrivateKey)key).getPublicKey());
+                assertTrue(Arrays.areEqual(good, key.getEncoded()));
+
+                String t1Msg = generateMismatched(kFact, info, t1Flip, names[i] + " t1");
+                String rhoMsg = generateMismatched(kFact, info, rhoFlip, names[i] + " rho");
+                assertEquals("java.lang.IllegalArgumentException: passed in public key does not match private values", t1Msg);
+                assertEquals(t1Msg, rhoMsg);
+            }
+        }
+    }
+
+    private String generateMismatched(KeyFactory kFact, PrivateKeyInfo info, byte[] publicKey, String label)
+        throws Exception
+    {
+        byte[] enc = new PrivateKeyInfo(info.getPrivateKeyAlgorithm(), info.parsePrivateKey(), null, publicKey).getEncoded();
+        try
+        {
+            kFact.generatePrivate(new PKCS8EncodedKeySpec(enc));
+            fail("no exception for mismatched " + label);
+            return null;
+        }
+        catch (InvalidKeySpecException e)
+        {
+            return e.getMessage();
+        }
+    }
+
     public void testPrivateKeyRecovery()
         throws Exception
     {
@@ -650,6 +700,73 @@ public class MLDSATest
         byte[] mu2 = sig.sign();
 
         assertTrue(Arrays.areEqual(mu, mu2));
+    }
+
+    public void testMLDSACalculateMuVerify()
+        throws Exception
+    {
+        KeyPairGenerator kpg = KeyPairGenerator.getInstance("ML-DSA", "BC");
+
+        kpg.initialize(MLDSAParameterSpec.ml_dsa_65, new SecureRandom());
+
+        KeyPair kp = kpg.generateKeyPair();
+        byte[][] messages = { new byte[0], msg };
+        byte[][] contexts = { null, Strings.toByteArray("context") };
+
+        for (int c = 0; c != contexts.length; c++)
+        {
+            for (int m = 0; m != messages.length; m++)
+            {
+                byte[] message = messages[m];
+
+                Signature calc = Signature.getInstance("ML-DSA-CALCULATE-MU", "BC");
+                calc.initSign(kp.getPrivate(), new SecureRandom());
+                if (contexts[c] != null)
+                {
+                    calc.setParameter(new ContextParameterSpec(contexts[c]));
+                }
+                calc.update(message);
+                byte[] mu = calc.sign();
+
+                // the verify side takes the mu in place of a signature and must accept the sign side's own
+                Signature ver = Signature.getInstance("ML-DSA-CALCULATE-MU", "BC");
+                ver.initVerify(kp.getPublic());
+                if (contexts[c] != null)
+                {
+                    ver.setParameter(new ContextParameterSpec(contexts[c]));
+                }
+                ver.update(message);
+                assertTrue("mu rejected, message length " + message.length, ver.verify(mu));
+
+                byte[] flipped = Arrays.clone(mu);
+                flipped[0] ^= 1;
+                ver.update(message);
+                assertFalse(ver.verify(flipped));
+
+                ver.update(message);
+                try
+                {
+                    ver.verify(new byte[3]);
+                    fail("short mu accepted");
+                }
+                catch (SignatureException e)
+                {
+                    assertEquals("mu value must be 64 bytes", e.getMessage());
+                }
+
+                // a rejected or malformed mu leaves the object ready for the next verification
+                ver.update(message);
+                assertTrue(ver.verify(mu));
+
+                if (contexts[c] != null)
+                {
+                    Signature noContext = Signature.getInstance("ML-DSA-CALCULATE-MU", "BC");
+                    noContext.initVerify(kp.getPublic());
+                    noContext.update(message);
+                    assertFalse(noContext.verify(mu));
+                }
+            }
+        }
     }
 
     public void testMLDSAMuKatTest()
